@@ -43,6 +43,7 @@ import {
   transcribeWithElevenLabsScribe,
   transcribeWithGroqWhisper,
   searchSuppliersRealtime,
+  buildNegotiationStrategy,
 } from '@kraya/agent-core';
 import {
   DEFAULT_WORKSPACE_ID,
@@ -1704,6 +1705,52 @@ export function createApp(envOverride?: Partial<AppEnv>) {
         'Content-Disposition': `attachment; filename="${rfq.rfqNumber}-landed-cost.xlsx"`,
       },
     });
+  });
+
+  app.post('/api/rfqs/:id/negotiation-strategy', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+    const db = await getDb(getEnv('DATABASE_URL'));
+    const id = c.req.param('id');
+    const [rfq] = await db
+      .select()
+      .from(schema.rfqs)
+      .where(and(eq(schema.rfqs.id, id), eq(schema.rfqs.workspaceId, wsId)));
+    if (!rfq) return c.json({ error: 'RFQ not found' }, 404);
+
+    const [ws] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.id, wsId));
+    const rfqQuotes = await db
+      .select()
+      .from(schema.quotes)
+      .where(and(eq(schema.quotes.rfqId, id), eq(schema.quotes.workspaceId, wsId)));
+    if (rfqQuotes.length === 0) {
+      return c.json({ error: 'No quotes recorded for this RFQ to negotiate.' }, 400);
+    }
+
+    const suppliersList = await db.select().from(schema.suppliers).where(eq(schema.suppliers.workspaceId, wsId));
+    const supMap = new Map(suppliersList.map((s) => [s.id, s]));
+
+    const quoteInputs = rfqQuotes.map((q) => {
+      const sup = supMap.get(q.supplierId);
+      return {
+        quoteId: q.id,
+        supplierId: q.supplierId,
+        supplierName: sup?.name || 'Supplier',
+        supplierPhone: sup?.phone,
+        supplierEmail: sup?.email,
+        baseUnitPaise: q.baseUnitPaise,
+        netLandedUnitPaise: q.netLandedUnitPaise,
+        creditAdjustedUnitPaise: q.creditAdjustedUnitPaise,
+        creditDays: q.effectiveCreditDays || q.creditDays || 0,
+        leadTimeDays: q.leadTimeDays,
+        reliabilityScore: sup?.reliabilityScore ?? 90,
+        quantity: q.quantity,
+        unit: q.rawUnit,
+      };
+    });
+
+    const strategy = buildNegotiationStrategy(rfq.title, ws?.legalName || 'Our Company', quoteInputs);
+    return c.json(strategy);
   });
 
   // =========================================================================

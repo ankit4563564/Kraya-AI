@@ -8,3 +8,4 @@ export * from './local-parser.js';
 export * from './outreach.js';
 export * from './documents.js';
 export * from './supplier-search.js';
+export * from './negotiation.js';

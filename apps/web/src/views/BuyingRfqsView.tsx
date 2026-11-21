@@ -10,11 +10,13 @@ import {
   AlertTriangle,
   ShieldCheck,
   Compass,
+  Sparkles,
 } from 'lucide-react';
 import { API_BASE, apiJson, ComplianceFlag, formatINR, SupplierRecord, UserRole } from '../lib/api';
 import { ModalDialog } from '../components/ModalDialog';
 import { OutreachModalRequest } from '../components/OutreachModal';
 import { SupplierDiscoveryModal } from '../components/SupplierDiscoveryModal';
+import { NegotiationModal, RfqNegotiationData } from '../components/NegotiationModal';
 
 interface LandedRow {
   quoteId: string;
@@ -96,6 +98,9 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
   const [showDiscover, setShowDiscover] = useState(false);
   const [discoverQuery, setDiscoverQuery] = useState('');
   const [quoteModalRfq, setQuoteModalRfq] = useState<RfqRecord | null>(null);
+  const [negotiationData, setNegotiationData] = useState<RfqNegotiationData | null>(null);
+  const [showNegotiation, setShowNegotiation] = useState(false);
+  const [negotiatingRfqId, setNegotiatingRfqId] = useState<string | null>(null);
   const [approveTarget, setApproveTarget] = useState<{ rfq: RfqRecord; row: LandedRow } | null>(null);
   const [approverName, setApproverName] = useState('Owner');
   const [approving, setApproving] = useState(false);
@@ -200,6 +205,21 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
     setQFreight('0');
     loadAll();
     onDataMutated();
+  };
+
+  const handleOpenNegotiation = async (rfq: RfqRecord) => {
+    setNegotiatingRfqId(rfq.id);
+    try {
+      const data = await apiJson<RfqNegotiationData>(`/api/rfqs/${rfq.id}/negotiation-strategy`, {
+        method: 'POST',
+      });
+      setNegotiationData(data);
+      setShowNegotiation(true);
+    } catch (err) {
+      alert(`Could not generate negotiation playbook: ${err instanceof Error ? err.message : 'Server error'}`);
+    } finally {
+      setNegotiatingRfqId(null);
+    }
   };
 
   const handleConfirmApprovePo = async () => {
@@ -405,6 +425,16 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
                 >
                   <RefreshCw size={13} /> 1-Click Reorder
                 </button>
+                {rfq.quotesCount >= 2 && (
+                  <button
+                    type="button"
+                    disabled={negotiatingRfqId === rfq.id}
+                    className="btn btn-sm btn-primary"
+                    onClick={() => handleOpenNegotiation(rfq)}
+                  >
+                    <Sparkles size={13} /> {negotiatingRfqId === rfq.id ? 'Analyzing...' : 'Negotiate with AI'}
+                  </button>
+                )}
                 {rfq.quotesCount > 0 && (
                   <a
                     href={`${API_BASE}/api/rfqs/${rfq.id}/export.xlsx`}
@@ -972,6 +1002,13 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
           loadAll();
           onDataMutated();
         }}
+        onOpenOutreach={onOpenOutreach}
+      />
+
+      <NegotiationModal
+        open={showNegotiation}
+        onClose={() => setShowNegotiation(false)}
+        data={negotiationData}
         onOpenOutreach={onOpenOutreach}
       />
     </div>

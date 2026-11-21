@@ -811,11 +811,19 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             {activeFeatureTab === 'personalise' && (
               <div className="switcher-preview-card anim-fade-in">
                 <div className="stacked-leads-preview">
+                  <div className="lead-row lead-3">
+                    <img src="/images/avatar-2.jpg" alt="" />
+                    <div className="lead-bar bar-long" />
+                  </div>
+                  <div className="lead-row lead-2">
+                    <img src="/images/avatar-1.jpg" alt="" />
+                    <div className="lead-bar bar-med" />
+                  </div>
                   <div className="lead-row lead-1">
                     <img src="/images/avatar-4.jpg" alt="" />
                     <div className="lead-info">
-                      <strong>AI Dynamic Outreach</strong>
-                      <span>Context-rich GST 2.0 &amp; credit terms generated</span>
+                      <strong>AI Dynamic Context Injection</strong>
+                      <span>GST 2.0 &amp; Custom MSME 45-day credit terms</span>
                     </div>
                   </div>
                 </div>
@@ -826,11 +834,19 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             {activeFeatureTab === 'book' && (
               <div className="switcher-preview-card anim-fade-in">
                 <div className="stacked-leads-preview">
+                  <div className="lead-row lead-3">
+                    <img src="/images/avatar-6.jpg" alt="" />
+                    <div className="lead-bar bar-long" />
+                  </div>
+                  <div className="lead-row lead-2">
+                    <img src="/images/avatar-3.jpg" alt="" />
+                    <div className="lead-bar bar-med" />
+                  </div>
                   <div className="lead-row lead-1">
                     <img src="/images/avatar-5.jpg" alt="" />
                     <div className="lead-info">
-                      <strong>Meeting Auto-Confirmed</strong>
-                      <span>9:30 AM &bull; Direct Google / Outlook Calendar Sync</span>
+                      <strong>Meeting Auto-Confirmed &bull; 9:30 AM</strong>
+                      <span>Direct Google / Outlook Calendar Sync &bull; 30 Min</span>
                     </div>
                   </div>
                 </div>
@@ -906,9 +922,25 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 5: Customer Testimonials 4-Card Grid (Matching Frame 040 of the video) */}
+      {/* Section 5: Customer Testimonials 4-Card Grid (Matching Frame 038 & 040 of the video) */}
       {!result && (
         <section className="customer-testimonials-section">
+          <div className="section-header-split" style={{ marginBottom: 32 }}>
+            <div>
+              <h2 className="section-headline">Teams trust Omni SDR</h2>
+              <p className="section-subtext">
+                Real results—from startups to heavy engineering enterprises—that prove automation pays for itself.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary pill-cta"
+              onClick={() => onNavigate('suppliers')}
+            >
+              Get Started &bull;
+            </button>
+          </div>
+
           <div className="testimonials-grid">
             <div className="testimonial-portrait-card">
               <div className="portrait-img-box">
@@ -1278,47 +1310,93 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               </button>
             </div>
           </div>
+        </section>
+      )}
 
-          <div className="pricing-trust-banner">
-            <div className="trust-banner-info">
-              <h3>Teams trust Kraya AI</h3>
-              <p>Real results — from startups to heavy engineering enterprises — that prove automation pays for itself.</p>
+      {/* Section 6: Knowledge Base / Blog Triad (Matching Frame 042 of the video) */}
+      {!result && (
+        <section className="blog-section" aria-label="Knowledge Base and Resources">
+          <div className="blog-featured-card">
+            <div className="blog-featured-img">
+              <img src="/images/office.jpg" alt="Support workspace" />
             </div>
-            <div className="trust-avatars-row">
-              <span className="trust-badge">Tata AutoComp</span>
-              <span className="trust-badge">Apex Precision</span>
-              <span className="trust-badge">Kirloskar Supplier</span>
-              <span className="trust-badge">Bharat Heavy Forge</span>
+            <div className="blog-featured-body">
+              <span className="blog-tag">AGENT USE CASES</span>
+              <h3>How Customer Support Agents Can Cut Response Times by 60%</h3>
+              <p>Discover how AI-powered customer support agents can automate ticket triage, provide instant answers, and dramatically reduce average handling times without compromising service quality.</p>
+              <div className="blog-meta">
+                <img src="/images/avatar-3.jpg" className="author-thumb" alt="Adam Guild" />
+                <strong style={{ color: '#0f172a' }}>Adam Guild</strong>
+                <span>&bull;</span>
+                <span>Aug 9, 2025</span>
+                <span>&bull;</span>
+                <span className="pill pill-sm" style={{ background: '#f1f5f9', color: '#64748b' }}>5 min read</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="blog-grid-triad">
+            <div className="blog-triad-card">
+              <div className="triad-text">
+                <span className="blog-tag">AGENT USE CASES</span>
+                <h4>Using AI Sales Agents to Boost Lead Conversion Rates</h4>
+                <div className="triad-meta">Aug 9, 2025 &bull; 3 min read</div>
+              </div>
+              <div className="triad-thumb">
+                <img src="/images/office.jpg" alt="" />
+              </div>
+            </div>
+
+            <div className="blog-triad-card">
+              <div className="triad-text">
+                <span className="blog-tag">AUTOMATION TIPS</span>
+                <h4>5 Automation Workflows Every Business Should Implement in 2025</h4>
+                <div className="triad-meta">Aug 9, 2025 &bull; 2 min read</div>
+              </div>
+              <div className="triad-thumb">
+                <img src="/images/factory.jpg" alt="" />
+              </div>
+            </div>
+
+            <div className="blog-triad-card">
+              <div className="triad-text">
+                <span className="blog-tag">AUTOMATION TIPS</span>
+                <h4>How to Integrate AI Agents with Your Existing Tools</h4>
+                <div className="triad-meta">Aug 7, 2025 &bull; 4 min read</div>
+              </div>
+              <div className="triad-thumb">
+                <img src="/images/office.jpg" alt="" />
+              </div>
             </div>
           </div>
         </section>
       )}
 
-      {/* Section 6: Statutory & Operational FAQs (Matching Frame 045 of the video) */}
+      {/* Section 7: Statutory & Operational FAQs (Matching Frame 042 & 045 of the video) */}
       {!result && (
         <section className="faq-section" aria-label="Frequently asked questions">
           <div className="faq-header">
-            <h2 className="faq-title">Frequently asked questions</h2>
-            <p className="faq-subtitle">Everything you need to know about Indian statutory compliance and Kraya's deterministic engine.</p>
+            <h2 className="faq-title">Your questions, answered.</h2>
+            <p className="faq-subtitle">Everything you need to know about Indian statutory compliance, platform integrations, and billing.</p>
           </div>
 
           <div className="faq-list">
             {[
               {
-                q: 'How does Kraya verify GST 2.0 without leaking proprietary data?',
-                a: 'Kraya uses an offline, deterministic Mod-36 checksum engine and local parsing. Your vendor pricing, quote terms, and factory financial documents are encrypted and never sent to public generative AI model training pools.',
+                q: 'How much control do we keep?',
+                a: 'You retain complete supervisory control. Kraya operates with amber human-in-the-loop verification chips for missing figures and never commits payments or ledger updates without explicit approval.',
               },
               {
-                q: 'How does MSME Section 43B(h) 45-day calculation work with Udyam verification?',
-                a: 'Kraya classifies vendors into Micro, Small, or Medium based on verified Udyam records. Micro and Small suppliers are anchored to 15-day or 45-day statutory payment clocks to protect your company from income tax disallowances and penal compound interest.',
+                q: 'What does it integrate with?',
+                a: 'Kraya connects seamlessly with Tally Prime, SAP Business One, Busy ERP, Gmail, Microsoft Outlook, and official WhatsApp Business APIs with zero coding required.',
               },
               {
-                q: 'Can Kraya parse Hinglish voice notes and handwritten parchis?',
-                a: 'Yes. Kraya incorporates multi-lingual Indian speech-to-text and document vision supporting Hinglish, English, Hindi, Tamil, Kannada, and Malayalam. Unclear or missing fields are explicitly flagged as amber chips—never hallucinated or guessed.',
+                q: 'How are deliverability & compliance handled?',
+                a: 'Every quotation and invoice undergoes automated GST 2.0 ITC lock-in checksums, Section 43B(h) 45-day MSME payment clocks, and double-freight taxation audits before outreach is scheduled.',
               },
               {
-                q: 'How do I export to Tally XML and share with my Chartered Accountant?',
-                a: 'Every verified quotation, PO, and invoice is exportable into standardized Tally XML ledger vouchers and CA GST IMS reconciliation packs in 1 click from the Unified Inbox.',
+                q: 'How fast can we go live and how is success measured?',
+                a: 'Factories go live within 48 hours. Success is measured via real-time Money Leak radar metrics, net landed savings per unit, and automated pre-payment CA audit packs.',
               },
             ].map((faq, idx) => (
               <div key={idx} className={`faq-card ${openFaq === idx ? 'open' : ''}`}>
@@ -1341,12 +1419,12 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 6: Blue CTA Banner (Matching Frame 045 of the video) */}
+      {/* Section 8: Royal Blue CTA Banner (Matching Frame 045 of the video) */}
       {!result && (
         <section className="video-cta-banner">
           <div className="cta-banner-content">
             <div className="cta-banner-left">
-              <h2>Procure Smarter. Protect Working Capital.</h2>
+              <h2>Procure Smarter.<br />Protect Working Capital.</h2>
               <button
                 type="button"
                 className="btn btn-cta-light"
@@ -1356,7 +1434,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                   textarea?.focus();
                 }}
               >
-                Run Procurement Agent •
+                Run Procurement Agent &bull;
               </button>
             </div>
             <div className="cta-banner-right">
@@ -1368,17 +1446,54 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Modern Footer inside the canvas (Matching Frame 046 of the video) */}
-      <footer className="canvas-footer-modern">
-        <div className="footer-left">
-          <strong>Kraya</strong>
-          <span>Pre-payment verification &amp; CA audit support. Final GST ITC &amp; 43B(h) filings remain subject to your CA.</span>
+      {/* Section 9: Modern Card Footer (Matching Frame 046 of the video) */}
+      <footer className="video-footer-card">
+        <div className="footer-top-row">
+          <div className="footer-brand-column">
+            <div className="footer-brand-logo">
+              <div className="brand-mark" style={{ width: 38, height: 38 }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="9" stroke="#ffffff" strokeWidth="2.5" />
+                  <circle cx="14" cy="10" r="3" fill="#ffffff" />
+                </svg>
+              </div>
+              <span className="brand-title" style={{ fontSize: 24, fontWeight: 800, color: '#0f172a' }}>Kraya</span>
+            </div>
+            <div className="subscribe-box">
+              <label htmlFor="subscribe-email">GST 2.0 &amp; 43B(h) PROCUREMENT UPDATES</label>
+              <div className="subscribe-input-wrap">
+                <input id="subscribe-email" type="email" placeholder="owner@factory.in" />
+                <button type="button" className="btn btn-primary btn-sm" style={{ padding: '8px 18px', borderRadius: 999 }}>Subscribe</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="footer-nav-columns">
+            <div className="footer-col">
+              <h4>PROCUREMENT PILLARS</h4>
+              <ul>
+                <li><button type="button" onClick={() => onNavigate('buying')}>Credit-Adjusted Landed Cost</button></li>
+                <li><button type="button" onClick={() => onNavigate('daily')}>3-Way PO vs Invoice Audit</button></li>
+                <li><button type="button" onClick={() => setOpenFaq(0)}>MSME 43B(h) Protection</button></li>
+              </ul>
+            </div>
+            <div className="footer-col">
+              <h4>WORKSPACE DESKS</h4>
+              <ul>
+                <li><button type="button" onClick={() => onNavigate('inbox')}>Unified Ingestion Inbox</button></li>
+                <li><button type="button" onClick={() => onNavigate('buying')}>Buying &amp; RFQs Desk</button></li>
+                <li><button type="button" onClick={() => onNavigate('suppliers')}>Unified Supplier Book</button></li>
+              </ul>
+            </div>
+          </div>
         </div>
-        <div className="footer-links">
-          <button type="button" onClick={() => onNavigate('inbox')}>Unified Inbox</button>
-          <button type="button" onClick={() => onNavigate('buying')}>Buying &amp; RFQs</button>
-          <button type="button" onClick={() => onNavigate('daily')}>Daily Audit</button>
-          <button type="button" onClick={() => onNavigate('suppliers')}>Suppliers</button>
+        <div className="footer-bottom-bar">
+          <span>&copy; {new Date().getFullYear()} Kraya Procurement Technologies. Pre-payment verification &amp; CA audit support. All rights reserved.</span>
+          <div className="footer-legal-links">
+            <button type="button">Privacy Policy</button>
+            <button type="button">Terms of Service</button>
+            <button type="button">Security &bull; SOC2</button>
+          </div>
         </div>
       </footer>
     </div>
