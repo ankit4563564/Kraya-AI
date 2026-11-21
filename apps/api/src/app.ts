@@ -2692,6 +2692,8 @@ export function createApp(envOverride?: Partial<AppEnv>) {
 
     const apiKey = getEnv('GEMINI_API_KEY');
     const model = getEnv('GEMINI_MODEL') || 'gemini-3.5-flash-lite';
+    const googleMapsApiKey = getEnv('GOOGLE_MAPS_API_KEY');
+    const openCorporatesApiKey = getEnv('OPENCORPORATES_API_KEY');
 
     const discovery = await searchSuppliersRealtime(
       {
@@ -2704,6 +2706,8 @@ export function createApp(envOverride?: Partial<AppEnv>) {
         minCreditDays: body.minCreditDays,
         buyerWaccPct: buyerProfile?.waccPct ?? 14.0,
         specificCriteria: body.specificCriteria,
+        googleMapsApiKey,
+        openCorporatesApiKey,
       },
       apiKey,
       model

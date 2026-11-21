@@ -1,4 +1,6 @@
 import { searchSuppliersRealtime } from '../packages/agent-core/dist/supplier-search.js';
+import { resolveLocationAndRoadDistance } from '../packages/agent-core/dist/location-engine.js';
+import { verifySupplierGlobalRegistry } from '../packages/agent-core/dist/verification-engine.js';
 import { validateGstin } from '../packages/finance-engine/dist/gstin.js';
 import { readFileSync } from 'fs';
 
@@ -57,6 +59,10 @@ async function runLogicalTests() {
     assert(s.matchScore >= 50 && s.matchScore <= 100, `Match score calibrated: ${s.matchScore}/100`);
     assert(s.gstin.length === 15, `GSTIN is 15 characters: ${s.gstin}`);
     assert(s.whatsAppBridgeUrl.startsWith('https://wa.me/'), `1-click WhatsApp outreach bridge generated: ${s.whatsAppBridgeUrl.slice(0, 40)}...`);
+    assert(s.googleMapsUrl?.startsWith('https://www.google.com/maps/search/'), `Google Maps search URL generated: ${s.googleMapsUrl?.slice(0, 45)}...`);
+    assert(s.googleMapsDirectionsUrl?.startsWith('https://www.google.com/maps/dir/'), `Google Maps directions URL generated: ${s.googleMapsDirectionsUrl?.slice(0, 45)}...`);
+    assert(s.roadTransitDurationMins > 0, `Road transit duration computed: ${s.roadTransitDurationMins} mins`);
+    assert(typeof s.globalVerification?.isVerified === 'boolean', `Global verification evaluated: ${s.globalVerification?.registrySource}`);
 
     const gstinCheck = validateGstin(s.gstin);
     assert(gstinCheck.stateCode === '29', `Supplier GSTIN matches Karnataka state code 29`);
@@ -88,6 +94,23 @@ async function runLogicalTests() {
   assert(res2.suppliers[0].stateCode === '27', `Fallback correctly respected buyer Maharashtra state code 27`);
   assert(res2.suppliers[0].taxRouting === 'intra_state', `Intra-state tax routing preserved in fallback`);
   assert(res2.suppliers[0].gstinValid === true, `Fallback GSTIN passes 100% Mod-36 checksum`);
+  assert(res2.suppliers[0].googleMapsUrl.startsWith('https://www.google.com/maps/search/'), `Fallback has valid Google Maps link`);
+  assert(res2.suppliers[0].globalVerification.isVerified === true, `Fallback has GLEIF registry badge`);
+
+  console.log('\n--- Test 3: Standalone Location & Global Registry Double-Verification ---');
+  const locResult = await resolveLocationAndRoadDistance(
+    'Phase 2, Peenya Industrial Area, Bengaluru, Karnataka',
+    'Bommasandra Industrial Area, Bengaluru, Karnataka'
+  );
+  assert(locResult.roadDistanceKm > 20, `Road distance calculated: ${locResult.roadDistanceKm} km`);
+  assert(locResult.transitDurationMins > 20, `Transit duration calculated: ${locResult.transitDurationMins} mins`);
+  assert(locResult.googleMapsSearchUrl.includes('google.com/maps'), `Google Maps Search URL generated`);
+  assert(locResult.googleMapsDirectionsUrl.includes('google.com/maps'), `Google Maps Directions URL generated`);
+
+  const gleifResult = await verifySupplierGlobalRegistry('Tata Steel Limited', 'India');
+  assert(gleifResult.isVerified === true, `GLEIF API verified legal entity status`);
+  assert(gleifResult.registrySource === 'gleif_global', `Verified via official GLEIF ISO 17442 registry (gleif_global)`);
+  assert(gleifResult.badges.length > 0, `Badges generated: ${gleifResult.badges.join(', ')}`);
 
   console.log(`\n======================================================`);
   console.log(`Logical Supplier Search Test Results: ${passed}/${total} PASSED`);

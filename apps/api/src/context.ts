@@ -50,6 +50,8 @@ export interface AppEnv {
   R2_BUCKET_NAME?: string;
   R2_ENDPOINT?: string;
   LOCAL_VAULT_DIR?: string;
+  GOOGLE_MAPS_API_KEY?: string;
+  OPENCORPORATES_API_KEY?: string;
 }
 
 export interface AuthContext {

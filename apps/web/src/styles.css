@@ -3973,3 +3973,221 @@ dialog::backdrop {
 .footer-legal-links button:hover {
   color: #0f172a;
 }
+
+/* Process Comparison Section (Matching Frames 016 - 027 of the video) */
+.process-comparison-section {
+  max-width: 1040px;
+  width: 100%;
+  margin: 80px auto 0;
+  padding: 0 16px;
+}
+
+.process-header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.process-eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #2563eb;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.process-headline {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 36px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  margin: 0 0 14px;
+}
+
+.process-subtext {
+  font-size: 15px;
+  color: #64748b;
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.55;
+}
+
+.process-columns-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+  align-items: flex-start;
+}
+
+.process-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.process-col-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.04);
+  margin-bottom: 4px;
+}
+
+.col-manual .process-col-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.col-ai .process-col-header {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.col-ai .process-col-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+}
+
+.badge-hours {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 9999px;
+  padding: 4px 14px;
+}
+
+.badge-done {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #f59e0b;
+  background: #fef3c7;
+  border-radius: 9999px;
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.badge-time {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+  padding: 4px 12px;
+}
+
+.process-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.process-step-card {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 14px -2px rgba(15, 23, 42, 0.04);
+  transition: all 180ms ease;
+}
+
+.process-step-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 8px 24px -4px rgba(15, 23, 42, 0.08);
+}
+
+.step-num {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.process-step-card p {
+  font-size: 12.5px;
+  color: #64748b;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.ai-step-card {
+  border-left: 3px solid #2563eb;
+}
+
+.ai-step-card .step-num {
+  color: #1e40af;
+}
+
+/* Studio Composer Container */
+.studio-composer-container {
+  max-width: 1040px;
+  width: 100%;
+  margin: 0 auto 48px;
+  padding: 0 16px;
+}
+
+/* Animations */
+.anim-fade-in {
+  animation: fadeIn 250ms ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Light & Outline Buttons */
+.btn-light {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+.btn-light:hover {
+  background: #f8fafc !important;
+}
+
+.btn-outline {
+  background: transparent !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+}
+.btn-outline:hover {
+  background: var(--bg-subtle) !important;
+  border-color: #cbd5e1 !important;
+}
+
+.pill-sm {
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+}
+
+.brand-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 860px) {
+  .process-columns-grid {
+    grid-template-columns: 1fr;
+  }
+}

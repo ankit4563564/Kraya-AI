@@ -13,6 +13,9 @@ import {
   TrendingDown,
   Building2,
   DollarSign,
+  ExternalLink,
+  Navigation,
+  Globe,
 } from 'lucide-react';
 import { apiJson, formatINR, SupplierRecord } from '../lib/api';
 import { ModalDialog } from './ModalDialog';
@@ -44,6 +47,15 @@ export interface DiscoveredSupplierItem {
   udyamTier: 'micro' | 'small' | 'medium' | 'trader' | 'unregistered';
   section43BhCapDays: 15 | 45 | null;
   distanceKmEstimate: number;
+  roadTransitDurationMins?: number;
+  googleMapsUrl?: string;
+  googleMapsDirectionsUrl?: string;
+  globalVerification?: {
+    isVerified: boolean;
+    lei: string | null;
+    registrySource: string;
+    badges: string[];
+  };
   matchScore: number;
   matchReason: string;
   criteriaFit: Record<string, { pass: boolean; note: string }>;
@@ -344,11 +356,20 @@ export function SupplierDiscoveryModal({
                 >
                   <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div>
-                      <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                      <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 600, fontSize: 14 }}>{sup.businessName}</span>
                         <span className="pill pill-success">
                           <ShieldCheck size={11} /> {sup.matchScore}% Match
                         </span>
+                        {sup.globalVerification?.isVerified && (
+                          <span
+                            className="pill pill-success"
+                            style={{ background: '#dcfce7', color: '#166534', fontWeight: 600 }}
+                            title={sup.globalVerification.lei ? `LEI: ${sup.globalVerification.lei}` : 'GLEIF ISO 17442 Verified'}
+                          >
+                            <Globe size={11} /> GLEIF Verified
+                          </span>
+                        )}
                         {sup.taxRouting === 'intra_state' ? (
                           <span className="pill">CGST+SGST (Local)</span>
                         ) : (
@@ -371,11 +392,37 @@ export function SupplierDiscoveryModal({
                           gap: 12,
                           marginTop: 3,
                           alignItems: 'center',
+                          flexWrap: 'wrap',
                         }}
                       >
                         <span className="row" style={{ gap: 4, alignItems: 'center' }}>
-                          <MapPin size={12} /> {sup.address} (~{sup.distanceKmEstimate} km)
+                          <MapPin size={12} /> {sup.address} (~{sup.distanceKmEstimate} km
+                          {sup.roadTransitDurationMins ? ` · ${sup.roadTransitDurationMins} min drive` : ''})
                         </span>
+                        {sup.googleMapsUrl && (
+                          <a
+                            href={sup.googleMapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="row"
+                            style={{ gap: 3, color: 'var(--primary)', textDecoration: 'none', fontSize: 11.5, alignItems: 'center' }}
+                            title="Inspect factory location on Google Maps satellite & street view"
+                          >
+                            <ExternalLink size={11} /> Google Maps
+                          </a>
+                        )}
+                        {sup.googleMapsDirectionsUrl && (
+                          <a
+                            href={sup.googleMapsDirectionsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="row"
+                            style={{ gap: 3, color: 'var(--primary)', textDecoration: 'none', fontSize: 11.5, alignItems: 'center' }}
+                            title="View driving directions from your plant to supplier"
+                          >
+                            <Navigation size={11} /> Route
+                          </a>
+                        )}
                         {sup.contactPerson && <span>Contact: {sup.contactPerson}</span>}
                         {sup.phone && <span>Mobile: +91 {sup.phone}</span>}
                       </div>
