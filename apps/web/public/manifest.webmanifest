@@ -1,0 +1,17 @@
+{
+  "name": "Kraya — AI Procurement CFO for Indian SMBs",
+  "short_name": "Kraya",
+  "description": "Money Leak Radar, GST 2.0 ITC Protection, Credit-Adjusted Landed Cost & 1-Click WhatsApp/PO Workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f4f4",
+  "theme_color": "#1ead6f",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

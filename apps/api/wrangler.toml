@@ -1,0 +1,26 @@
+name = "kraya-api"
+main = "src/worker.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+NODE_ENV = "production"
+REQUIRE_AUTH = "true"
+
+# Required production secrets (set via `wrangler secret put <NAME>`):
+# - DATABASE_URL (Neon Serverless PostgreSQL connection string)
+# - SESSION_SECRET (32-byte random hex for signed download URLs)
+# - APP_ORIGIN (e.g., https://kraya.pages.dev or https://app.yourdomain.in)
+#
+# Optional AI / Voice / Messaging secrets (`wrangler secret put`):
+# - GEMINI_API_KEY, ELEVENLABS_API_KEY, GROQ_API_KEY
+# - RESEND_API_KEY, RESEND_FROM_EMAIL
+# - WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN
+# - INBOUND_WEBHOOK_SECRET, WEBHOOK_DEFAULT_WORKSPACE_ID
+#
+# Persistent File Storage — Cloudflare R2 Binding (10 GB free, ₹0 egress):
+# 1. Run `wrangler r2 bucket create kraya-vault`
+# 2. Uncomment the 3 lines below before running `wrangler deploy`:
+# [[r2_buckets]]
+# binding = "VAULT_BUCKET"
+# bucket_name = "kraya-vault"

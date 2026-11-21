@@ -1,0 +1,25 @@
+{
+  "name": "kraya-procurement-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unified AI Procurement Workspace for Indian SMBs — Accio-inspired execution-first agent with deterministic GST 2.0 & CFO finance engine.",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @kraya/api --filter @kraya/web dev",
+    "dev:api": "pnpm --filter @kraya/api dev",
+    "dev:web": "pnpm --filter @kraya/web dev",
+    "build": "pnpm --filter @kraya/finance-engine build && pnpm --filter @kraya/agent-core build && pnpm --filter @kraya/api build && pnpm --filter @kraya/web build",
+    "test": "vitest run",
+    "test:eval": "pnpm --filter @kraya/agent-core test:eval",
+    "typecheck": "pnpm -r typecheck",
+    "verify:live": "node ./scripts/verify-live-integrations.mjs",
+    "voice:setup": "node ./scripts/setup-voicestudio.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@9.15.4"
+}
