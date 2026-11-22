@@ -4,14 +4,18 @@ import { desc, eq, and, isNull } from 'drizzle-orm';
 import {
   addCalendarDays,
   auditSupplierInvoice,
+  BookInvoiceRecord,
   computeGstLine,
   computeLandedCost,
+  exportImsActionCsv,
   formatINR,
   fromPaise,
   FreightGstMode,
   GstRegime,
   InvoiceAuditInput,
+  parseGstr2bPayload,
   rankSupplierQuotes,
+  reconcileGstr2b,
   SupplierTaxProfile,
   toPaise,
   TurnoverBand,
@@ -127,7 +131,11 @@ const PUBLIC_PATHS = new Set([
   '/api/auth/invitations/accept',
 ]);
 
-const CA_ALLOWED_POST_PATHS = new Set(['/api/auth/logout', '/api/auth/switch-workspace']);
+const CA_ALLOWED_POST_PATHS = new Set([
+  '/api/auth/logout',
+  '/api/auth/switch-workspace',
+  '/api/gst/gstr2b-reconcile',
+]);
 
 const AUTH_RATE_LIMITED_PATHS = new Set([
   '/api/auth/login',
@@ -3229,6 +3237,231 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     });
     await recordAuditLog(db, ctx, 'live_send', 'resend_email', receipt.providerMessageId, { toEmail: body.toEmail });
     return c.json(receipt);
+  });
+
+  // =========================================================================
+  // PHASE 13 — GSTR-2B / IMS RECONCILIATION & CFO SPEND INTELLIGENCE
+  // =========================================================================
+  app.post('/api/gst/gstr2b-reconcile', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+    const db = await getDb(getEnv('DATABASE_URL'));
+
+    const body = await c.req.json<{
+      payload: string | Record<string, unknown> | unknown[];
+      tolerancePaise?: number;
+      format?: 'json' | 'csv';
+    }>();
+
+    if (!body.payload) {
+      return c.json({ error: 'GSTR-2B JSON or CSV payload is required.' }, 400);
+    }
+
+    let gstr2bEntries;
+    try {
+      gstr2bEntries = parseGstr2bPayload(body.payload);
+    } catch (err) {
+      return c.json(
+        { error: `Invalid GSTR-2B payload format: ${err instanceof Error ? err.message : 'parse failed'}` },
+        400
+      );
+    }
+
+    const [invs, sups, grns] = await Promise.all([
+      db.select().from(schema.invoices).where(eq(schema.invoices.workspaceId, wsId)).orderBy(desc(schema.invoices.createdAt)),
+      db.select().from(schema.suppliers).where(eq(schema.suppliers.workspaceId, wsId)),
+      db.select().from(schema.grnReceipts).where(eq(schema.grnReceipts.workspaceId, wsId)),
+    ]);
+
+    const supMap = new Map(sups.map((s) => [s.id, s]));
+    const grnAcceptedPoIds = new Set(
+      grns.filter((g) => g.qcStatus === 'accepted' || g.qcStatus === 'partial').map((g) => g.poId)
+    );
+
+    const bookRecords: BookInvoiceRecord[] = invs.map((inv) => {
+      const sup = supMap.get(inv.supplierId);
+      const gstPaise = inv.cgstPaise + inv.sgstPaise + inv.igstPaise;
+      const grnAccepted = inv.poId ? grnAcceptedPoIds.has(inv.poId) || inv.poMatchStatus === 'clean' : true;
+      return {
+        id: inv.id,
+        supplierId: inv.supplierId,
+        supplierName: sup?.name || 'Supplier',
+        supplierPhone: sup?.phone ?? null,
+        supplierGstin: inv.supplierGstin ?? sup?.gstin ?? null,
+        invoiceNumber: inv.invoiceNumber,
+        invoiceDate: inv.invoiceDate,
+        taxablePaise: inv.taxablePaise,
+        gstPaise,
+        grandTotalPaise: inv.grandTotalPaise,
+        auditStatus: inv.poMatchStatus === 'mismatch' || inv.imsSuggestedAction === 'REJECT' ? 'mismatch' : inv.poMatchStatus,
+        grnAccepted,
+      };
+    });
+
+    const summary = reconcileGstr2b(bookRecords, gstr2bEntries, {
+      tolerancePaise: typeof body.tolerancePaise === 'number' ? Math.max(0, Math.round(body.tolerancePaise)) : 100,
+    });
+
+    if (body.format === 'csv') {
+      const csv = exportImsActionCsv(summary);
+      return new Response(csv, {
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="kraya-ims-actions-${todayIso()}.csv"`,
+        },
+      });
+    }
+
+    return c.json(summary);
+  });
+
+  app.get('/api/analytics/cfo-intelligence', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+    const db = await getDb(getEnv('DATABASE_URL'));
+
+    const [invs, pos, sups, leaks, history] = await Promise.all([
+      db.select().from(schema.invoices).where(eq(schema.invoices.workspaceId, wsId)),
+      db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.workspaceId, wsId)),
+      db.select().from(schema.suppliers).where(eq(schema.suppliers.workspaceId, wsId)),
+      db.select().from(schema.moneyLeaks).where(eq(schema.moneyLeaks.workspaceId, wsId)),
+      db.select().from(schema.priceHistory).where(eq(schema.priceHistory.workspaceId, wsId)),
+    ]);
+
+    const supMap = new Map(sups.map((s) => [s.id, s]));
+
+    // 1. Totals (strict integer paise)
+    const activePos = pos.filter((p) => !p.cancelledAt);
+    const totalPoSpendPaise = activePos.reduce((acc, p) => acc + p.totalPaise, 0);
+    const totalInvoicedPaise = invs.reduce((acc, i) => acc + i.grandTotalPaise, 0);
+    const totalGstPaidPaise = invs.reduce((acc, i) => acc + i.cgstPaise + i.sgstPaise + i.igstPaise, 0);
+    const totalLeaksDetectedPaise = leaks.reduce((acc, l) => acc + l.amountPaise, 0);
+    const totalLeaksRecoveredPaise = leaks
+      .filter((l) => l.status === 'recovered' || l.status === 'resolved')
+      .reduce((acc, l) => acc + l.amountPaise, 0);
+
+    // 2. Spend by Category & Top Suppliers
+    const categoryTotals = new Map<string, number>();
+    const supplierTotals = new Map<string, { supplierId: string; name: string; category: string; spendPaise: number; invoiceCount: number }>();
+
+    for (const inv of invs) {
+      const sup = supMap.get(inv.supplierId);
+      const cat = sup?.category || 'General';
+      categoryTotals.set(cat, (categoryTotals.get(cat) || 0) + inv.grandTotalPaise);
+
+      const cur = supplierTotals.get(inv.supplierId) || {
+        supplierId: inv.supplierId,
+        name: sup?.name || 'Supplier',
+        category: cat,
+        spendPaise: 0,
+        invoiceCount: 0,
+      };
+      cur.spendPaise += inv.grandTotalPaise;
+      cur.invoiceCount += 1;
+      supplierTotals.set(inv.supplierId, cur);
+    }
+
+    const spendByCategory = [...categoryTotals.entries()]
+      .map(([category, spendPaise]) => ({ category, spendPaise }))
+      .sort((a, b) => b.spendPaise - a.spendPaise);
+
+    const topSuppliers = [...supplierTotals.values()]
+      .sort((a, b) => b.spendPaise - a.spendPaise)
+      .slice(0, 8);
+
+    // 3. Price-Creep Radar (compare earliest vs latest recorded landed unit rate per itemKey+supplier)
+    const groupedHistory = new Map<string, typeof history>();
+    for (const row of history) {
+      const k = `${row.itemKey}::${row.supplierId}`;
+      const arr = groupedHistory.get(k) || [];
+      arr.push(row);
+      groupedHistory.set(k, arr);
+    }
+
+    const priceCreepAlerts: Array<{
+      itemDescription: string;
+      supplierName: string;
+      unit: string;
+      baselineUnitPaise: number;
+      latestUnitPaise: number;
+      deltaPct: number;
+      observations: number;
+    }> = [];
+
+    for (const rows of groupedHistory.values()) {
+      if (rows.length < 2) continue;
+      const sorted = [...rows].sort(
+        (a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime()
+      );
+      const first = sorted[0];
+      const latest = sorted[sorted.length - 1];
+      if (first.netLandedUnitPaise <= 0) continue;
+      const deltaPct =
+        Math.round(((latest.netLandedUnitPaise - first.netLandedUnitPaise) / first.netLandedUnitPaise) * 1000) / 10;
+      if (deltaPct >= 2.0) {
+        priceCreepAlerts.push({
+          itemDescription: latest.itemDescription,
+          supplierName: supMap.get(latest.supplierId)?.name || 'Supplier',
+          unit: latest.unit,
+          baselineUnitPaise: first.netLandedUnitPaise,
+          latestUnitPaise: latest.netLandedUnitPaise,
+          deltaPct,
+          observations: sorted.length,
+        });
+      }
+    }
+    priceCreepAlerts.sort((a, b) => b.deltaPct - a.deltaPct);
+
+    // 4. MSME Section 43B(h) & Rule 37 Payment Cliff
+    const todayMs = new Date(`${todayIso()}T00:00:00Z`).getTime();
+    const paymentCliffs = invs
+      .filter((inv) => !inv.paidAt && (inv.msme43bhDueAt || inv.rule37CliffAt || inv.paymentDueAt))
+      .map((inv) => {
+        const sup = supMap.get(inv.supplierId);
+        const msmeDays = inv.msme43bhDueAt
+          ? Math.ceil((new Date(`${inv.msme43bhDueAt}T00:00:00Z`).getTime() - todayMs) / 86400000)
+          : null;
+        const rule37Days = inv.rule37CliffAt
+          ? Math.ceil((new Date(`${inv.rule37CliffAt}T00:00:00Z`).getTime() - todayMs) / 86400000)
+          : null;
+        return {
+          invoiceId: inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          supplierName: sup?.name || 'Supplier',
+          udyamTier: sup?.udyamTier || 'unknown',
+          grandTotalPaise: inv.grandTotalPaise,
+          msme43bhDueAt: inv.msme43bhDueAt,
+          msmeDaysRemaining: msmeDays,
+          rule37CliffAt: inv.rule37CliffAt,
+          rule37DaysRemaining: rule37Days,
+          urgency:
+            (msmeDays !== null && msmeDays <= 7) || (rule37Days !== null && rule37Days <= 15)
+              ? 'critical'
+              : (msmeDays !== null && msmeDays <= 15) || (rule37Days !== null && rule37Days <= 30)
+                ? 'warning'
+                : 'normal',
+        };
+      })
+      .sort((a, b) => {
+        const da = a.msmeDaysRemaining ?? a.rule37DaysRemaining ?? 999;
+        const db = b.msmeDaysRemaining ?? b.rule37DaysRemaining ?? 999;
+        return da - db;
+      });
+
+    return c.json({
+      totals: {
+        totalPoSpendPaise,
+        totalInvoicedPaise,
+        totalGstPaidPaise,
+        totalLeaksDetectedPaise,
+        totalLeaksRecoveredPaise,
+        openLeaksPaise: Math.max(0, totalLeaksDetectedPaise - totalLeaksRecoveredPaise),
+      },
+      spendByCategory,
+      topSuppliers,
+      priceCreepAlerts,
+      paymentCliffs,
+    });
   });
 
   // =========================================================================

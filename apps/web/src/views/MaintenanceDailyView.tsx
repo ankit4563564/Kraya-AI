@@ -9,10 +9,47 @@ import {
   FileSearch,
   FileSpreadsheet,
   FileCode2,
+  FileCheck2,
+  TrendingUp,
 } from 'lucide-react';
 import { API_BASE, apiJson, ComplianceFlag, formatINR, SupplierRecord, UserRole } from '../lib/api';
 import { ModalDialog } from '../components/ModalDialog';
 import { OutreachModalRequest } from '../components/OutreachModal';
+import { Gstr2bReconcilerModal } from '../components/Gstr2bReconcilerModal';
+
+interface CfoIntelligence {
+  totals: {
+    totalPoSpendPaise: number;
+    totalInvoicedPaise: number;
+    totalGstPaidPaise: number;
+    totalLeaksDetectedPaise: number;
+    totalLeaksRecoveredPaise: number;
+    openLeaksPaise: number;
+  };
+  spendByCategory: Array<{ category: string; spendPaise: number }>;
+  topSuppliers: Array<{ supplierId: string; name: string; category: string; spendPaise: number; invoiceCount: number }>;
+  priceCreepAlerts: Array<{
+    itemDescription: string;
+    supplierName: string;
+    unit: string;
+    baselineUnitPaise: number;
+    latestUnitPaise: number;
+    deltaPct: number;
+    observations: number;
+  }>;
+  paymentCliffs: Array<{
+    invoiceId: string;
+    invoiceNumber: string;
+    supplierName: string;
+    udyamTier: string;
+    grandTotalPaise: number;
+    msme43bhDueAt: string | null;
+    msmeDaysRemaining: number | null;
+    rule37CliffAt: string | null;
+    rule37DaysRemaining: number | null;
+    urgency: 'critical' | 'warning' | 'normal';
+  }>;
+}
 
 interface DailyTaskRow {
   id: string;
@@ -77,6 +114,8 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
 
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [showAmcModal, setShowAmcModal] = useState(false);
+  const [showGstr2bModal, setShowGstr2bModal] = useState(false);
+  const [cfoIntel, setCfoIntel] = useState<CfoIntelligence | null>(null);
   const [cnInvoice, setCnInvoice] = useState<InvoiceRow | null>(null);
   const [cnType, setCnType] = useState<'credit_note' | 'debit_note'>('credit_note');
   const [cnNumber, setCnNumber] = useState('');
@@ -120,13 +159,15 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
       apiJson<InvoiceRow[]>('/api/invoices'),
       apiJson<SupplierRecord[]>('/api/suppliers'),
       apiJson<PoOption[]>('/api/pos'),
+      apiJson<CfoIntelligence>('/api/analytics/cfo-intelligence').catch(() => null),
     ])
-      .then(([t, a, inv, s, p]) => {
+      .then(([t, a, inv, s, p, intel]) => {
         setTasks(t);
         setAmcs(a);
         setInvoices(inv);
         setSuppliers(s);
         setPos(p);
+        setCfoIntel(intel);
         if (s.length > 0 && !invSupplierId) {
           setInvSupplierId(s[0].id);
           setAmcSupId(s[0].id);
@@ -253,6 +294,72 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
           </div>
         )}
       </div>
+
+      {/* Phase 13 — CFO Spend, Price-Creep & 43B(h) Payment Cliff Intelligence */}
+      {cfoIntel && (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h2 className="card-title">CFO Spend, Price-Creep &amp; Payment Cliff Intelligence</h2>
+              <p className="card-subtitle">Live integer-paise aggregation of PO spend, GST ITC paid, silent vendor price creep, and statutory MSME 43B(h) deadlines.</p>
+            </div>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowGstr2bModal(true)}>
+              <FileCheck2 size={14} /> Reconcile GSTR-2B / IMS
+            </button>
+          </div>
+
+          <div className="grid-3" style={{ gap: 10 }}>
+            <div style={{ padding: 10, borderRadius: 8, background: 'var(--bg-app)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total PO Spend · GST Paid</div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>{formatINR(cfoIntel.totals.totalPoSpendPaise)}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                Invoiced: {formatINR(cfoIntel.totals.totalInvoicedPaise)} · GST: {formatINR(cfoIntel.totals.totalGstPaidPaise)}
+              </div>
+            </div>
+            <div style={{ padding: 10, borderRadius: 8, background: 'var(--bg-app)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Money Leaks Caught vs. Recovered</div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2, color: cfoIntel.totals.openLeaksPaise > 0 ? 'var(--danger)' : 'var(--success)' }}>
+                {formatINR(cfoIntel.totals.totalLeaksDetectedPaise)}
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                Recovered: {formatINR(cfoIntel.totals.totalLeaksRecoveredPaise)} · Open: {formatINR(cfoIntel.totals.openLeaksPaise)}
+              </div>
+            </div>
+            <div style={{ padding: 10, borderRadius: 8, background: 'var(--bg-app)', border: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Price-Creep &amp; 43B(h) Cliffs</div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2 }}>
+                {cfoIntel.priceCreepAlerts.length} Creep · {cfoIntel.paymentCliffs.length} Upcoming
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                {cfoIntel.paymentCliffs.filter((c) => c.urgency === 'critical').length} critical within 7 days
+              </div>
+            </div>
+          </div>
+
+          {cfoIntel.priceCreepAlerts.length > 0 && (
+            <div className="stack" style={{ gap: 6, marginTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <TrendingUp size={13} color="var(--danger)" /> Active Silent Price-Creep Alerts (&ge; 2%)
+              </div>
+              {cfoIntel.priceCreepAlerts.slice(0, 4).map((alert, idx) => (
+                <div
+                  key={`${alert.supplierName}-${idx}`}
+                  className="row"
+                  style={{ justifyContent: 'space-between', fontSize: 12, padding: '6px 10px', borderRadius: 6, background: 'color-mix(in srgb, var(--danger-soft) 25%, var(--bg-surface))' }}
+                >
+                  <span>
+                    <strong>{alert.itemDescription}</strong> ({alert.supplierName})
+                  </span>
+                  <span className="mono">
+                    {formatINR(alert.baselineUnitPaise)} &rarr; <strong>{formatINR(alert.latestUnitPaise)}</strong>/{alert.unit}{' '}
+                    <span style={{ color: 'var(--danger)', fontWeight: 700 }}>(+{alert.deltaPct}%)</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Today's Automated Checklist */}
       <div className="card">
@@ -667,6 +774,8 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
           </div>
         </form>
       </ModalDialog>
+
+      <Gstr2bReconcilerModal open={showGstr2bModal} onClose={() => setShowGstr2bModal(false)} />
     </div>
   );
 }

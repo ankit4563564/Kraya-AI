@@ -19,6 +19,10 @@ import {
   X,
   ShieldCheck,
   Check,
+  Clock,
+  Zap,
+  Pause,
+  Play,
 } from 'lucide-react';
 import {
   apiJson,
@@ -116,6 +120,110 @@ const STARTER_TABS = [
   },
 ];
 
+const MANUAL_STEPS = [
+  {
+    title: '1. Decipher handwritten parchis & WhatsApp chats',
+    desc: 'Meticulously re-type messy phone notes, WhatsApp audio quotes, and crumpled slips into spreadsheets.',
+  },
+  {
+    title: '2. Chase vendors for revised quotes & missing terms',
+    desc: 'Spend hours playing phone tag to clarify whether freight is included or extra, and who pays GTA tax.',
+  },
+  {
+    title: '3. Manually check GST portal for active filing status',
+    desc: "Open government GST portal to manually verify GSTIN validity and ensure ITC won't be blocked.",
+  },
+  {
+    title: '4. Build complex Excel sheets with mixed tax rates',
+    desc: 'Manually balance varying GST rates (5%, 12%, 18%), packaging charges, and transit insurance fees.',
+  },
+  {
+    title: '5. Guess credit-adjusted cost across payment terms',
+    desc: 'Blindly compare 15-day cash discounts with 60-day credit without calculating true WACC cost of capital.',
+  },
+  {
+    title: '6. Overlook silent ₹0.50/kg vendor rate creep',
+    desc: 'Repeat raw material purchases slowly rise in unit rate unnoticed until quarterly accounting audits.',
+  },
+  {
+    title: '7. Double GST charged on GTA freight transportation',
+    desc: 'Transporter levies GST on consignment notes while the supplier also adds GST on the same freight line.',
+  },
+  {
+    title: '8. Scramble to reconcile missing e-Invoices & IRNs',
+    desc: 'Chasing suppliers before GSTR-2B filing deadlines for missing e-way bills and mandatory QR codes.',
+  },
+  {
+    title: '9. Risk Section 43B(h) MSME payment disallowance',
+    desc: 'Delayed payments past 45 days lead to non-deductible tax liabilities and compound penal interest.',
+  },
+  {
+    title: '10. Manual voucher entry errors into Tally ERP',
+    desc: 'Typos in ledgers, tax heads, and invoice dates require weeks of painful reconciliation before CA audit.',
+  },
+];
+
+const AI_STEPS = [
+  {
+    title: '1. Multimodal Document Ingestion',
+    desc: 'Drop a WhatsApp quote, bill PDF, handwritten parchi, or Hinglish voice note—parsed instantly with zero typing.',
+  },
+  {
+    title: '2. Deterministic GST 2.0 & Landed Cost Engine',
+    desc: 'Validates GSTINs offline with Mod-36 checksums, computes credit-adjusted unit rates, and applies exact WACC.',
+  },
+  {
+    title: '3. Pre-Payment Money Leak Radar',
+    desc: 'Exposes duplicate freight GST, silent rate creep, and MSME 43B(h) payment deadlines before cheques are issued.',
+  },
+  {
+    title: '4. 1-Click WhatsApp Counter-Offer & Tally Export',
+    desc: 'Auto-generates structured counter-offers and exports verified purchase vouchers directly into Tally XML.',
+  },
+];
+
+const CASE_STUDIES = [
+  {
+    author: 'Rajesh Sharma',
+    role: 'Managing Director, Apex Precision Castings (Pune)',
+    image: '/images/director.jpg',
+    quote:
+      'Before Kraya, our accounts team was blindsided by freight double-taxation and late MSME payments. Kraya catches rate creep on WhatsApp before our accounts head signs the cheque. It paid for itself in the first 14 days.',
+    stat1Val: '₹4.8L+',
+    stat1Label: 'Annual Money Leaks caught before payment',
+    stat2Val: '100%',
+    stat2Label: 'GST 2.0 ITC reconciled with zero CA penalties',
+    ctaLabel: 'Open Landed Cost Comparison',
+    ctaTab: 'buying' as const,
+  },
+  {
+    author: 'Meenakshi Sundaram',
+    role: 'VP Finance, Peenya Precision Components (Bengaluru)',
+    image: '/images/avatar-5.jpg',
+    quote:
+      'Normalizing 30-day vs 60-day supplier credit terms used to take our purchase clerk half a day in Excel. Kraya computes WACC-adjusted landed cost in 60 seconds and drafts our WhatsApp counter-offer automatically.',
+    stat1Val: '94%',
+    stat1Label: 'Faster quote-to-PO turnaround across 3 plants',
+    stat2Val: '₹0',
+    stat2Label: 'Section 43B(h) MSME tax disallowances in FY26',
+    ctaLabel: 'Explore Daily Audit',
+    ctaTab: 'daily' as const,
+  },
+  {
+    author: 'Harishankar Nair',
+    role: 'Managing Partner, Coimbatore Foundry Works',
+    image: '/images/avatar-2.jpg',
+    quote:
+      'Our shop-floor supervisors send Hinglish and Tamil voice notes directly from the receiving bay. Kraya matches quantities against POs, flags short deliveries, and exports clean Tally XML for our CA.',
+    stat1Val: '6.2%',
+    stat1Label: 'Average raw-material unit cost reduction',
+    stat2Val: '14 Days',
+    stat2Label: 'Time to full ROI after onboarding suppliers',
+    ctaLabel: 'View Supplier Directory',
+    ctaTab: 'suppliers' as const,
+  },
+];
+
 export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOpenOutreach }: Props) {
   const isCaReadOnly = userRole === 'ca';
   const [prompt, setPrompt] = useState('');
@@ -128,26 +236,101 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<IngestResponse | null>(null);
   const [leaks, setLeaks] = useState<LeakRow[]>([]);
-  const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [activeFeatureTab, setActiveFeatureTab] = useState<'intake' | 'audit' | 'negotiate'>('intake');
-  const [manualHours, setManualHours] = useState(0);
+  const [activeCaseStudy, setActiveCaseStudy] = useState(0);
+  const [marqueePaused, setMarqueePaused] = useState(false);
+  const [processProgress, setProcessProgress] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const processSectionRef = useRef<HTMLElement>(null);
 
+  // Scroll-driven progress tracker for the Process Comparison section (drives live header fill, hour counter, and step checkmarks)
   useEffect(() => {
-    let val = 0;
-    const timer = setInterval(() => {
-      val += 4;
-      if (val >= 112) {
-        setManualHours(112);
-        clearInterval(timer);
-      } else {
-        setManualHours(val);
-      }
-    }, 35);
-    return () => clearInterval(timer);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) {
+      setProcessProgress(1);
+      return;
+    }
+
+    let rafId = 0;
+    const updateProgress = () => {
+      const el = processSectionRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const vh = window.innerHeight;
+      // Start progressing as the section enters the middle of the viewport, finish near its bottom
+      const start = vh * 0.72;
+      const totalDistance = Math.max(1, rect.height - vh * 0.35);
+      const traveled = start - rect.top;
+      const ratio = Math.max(0, Math.min(1, traveled / totalDistance));
+      setProcessProgress(ratio);
+    };
+
+    const onScroll = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(updateProgress);
+    };
+
+    updateProgress();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, []);
+
+  // Fallback IntersectionObserver for .scroll-reveal when CSS scroll-driven view() animations are unsupported
+  useEffect(() => {
+    const supportsViewTimeline =
+      typeof CSS !== 'undefined' &&
+      CSS.supports('(animation-timeline: view()) and (animation-range: entry)');
+    const noReducedMotion = window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+
+    if (supportsViewTimeline || !noReducedMotion) return;
+
+    const nodes = document.querySelectorAll<HTMLElement>('.scroll-reveal');
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.12 }
+    );
+
+    nodes.forEach((n) => {
+      n.classList.add('io-fallback-init');
+      observer.observe(n);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  // Fallback scroll progress bar for browsers without CSS animation-timeline: scroll()
+  useEffect(() => {
+    const supportsScrollTimeline =
+      typeof CSS !== 'undefined' && CSS.supports('animation-timeline', 'scroll()');
+    const noReducedMotion = window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+    if (supportsScrollTimeline || !noReducedMotion) return;
+
+    const bar = document.querySelector<HTMLElement>('.scroll-progress-bar');
+    if (!bar) return;
+
+    const onScroll = () => {
+      const scrollable = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      const pct = Math.min(1, Math.max(0, window.scrollY / scrollable));
+      bar.style.transform = `scaleX(${pct})`;
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
   const loadLeaks = () => {
@@ -256,72 +439,91 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
   };
 
   const focusPromptInput = () => {
-    window.scrollTo({ top: 380, behavior: 'smooth' });
-    (document.querySelector('.prompt-textarea') as HTMLTextAreaElement | null)?.focus();
+    const el = document.querySelector('.studio-composer-container');
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => {
+      (document.querySelector('.prompt-textarea') as HTMLTextAreaElement | null)?.focus();
+    }, 320);
   };
+
+  // Derived scroll-driven values for Process Comparison
+  const manualFill = Math.min(1, processProgress * 1.04);
+  const manualHoursLive = Math.round(manualFill * 112);
+  const aiFill = Math.min(1, processProgress * 2.6);
+  const aiSecondsLive = Math.round(aiFill * 60);
+  const aiDone = aiFill >= 0.98;
+
+  const currentStory = CASE_STUDIES[activeCaseStudy];
+  const switcherIndex = activeFeatureTab === 'intake' ? 0 : activeFeatureTab === 'audit' ? 1 : 2;
 
   return (
     <div className="hero-canvas">
-      {/* Hero Header Section */}
-      <div className="hero-heading">
-        <div className="hero-eyebrow">
-          <Sparkles size={12} />
-          <span>24/7 AI Procurement Engine</span>
+      {/* Hero Header Section with Ambient Blue Aurora */}
+      <div className="hero-stage">
+        <div className="hero-aurora-clouds" aria-hidden="true" />
+        <div className="hero-heading">
+          <div className="hero-eyebrow">
+            <Sparkles size={12} />
+            <span>24/7 AI Procurement Engine</span>
+          </div>
+          <h1 className="hero-main-title">
+            Procurement Engine that<br />
+            Never <span className="hero-inline-badge"><Sparkles size={16} /></span> Overpays
+          </h1>
+          <p>
+            Drop a WhatsApp quote, bill PDF, handwritten parchi, email, or Hinglish voice note — Kraya verifies GST 2.0, computes credit-adjusted landed cost, and catches money leaks in 60 seconds.
+          </p>
+          <div className="hero-cta-row">
+            <button
+              type="button"
+              className="btn btn-hero-cta"
+              onClick={focusPromptInput}
+            >
+              Run Procurement Agent <span className="cta-dot" aria-hidden="true" />
+            </button>
+          </div>
         </div>
-        <h1 className="hero-main-title">
-          Procurement Engine that<br />
-          Never <span className="hero-inline-badge"><Sparkles size={16} /></span> Overpays
-        </h1>
-        <p>
-          Drop a WhatsApp quote, bill PDF, handwritten parchi, email, or Hinglish voice note — Kraya verifies GST 2.0, computes credit-adjusted landed cost, and catches money leaks in 60 seconds.
-        </p>
-        <div className="hero-cta-row">
-          <button
-            type="button"
-            className="btn btn-hero-cta"
-            onClick={focusPromptInput}
-          >
-            Run Procurement Agent •
-          </button>
-        </div>
-      </div>
 
-      {/* Hero Radar Centerpiece with Industrial Procurement Roles */}
-      <div className="hero-centerpiece-container">
-        <div className="hero-radar-orb">
-          <div className="radar-core-ring">
-            <svg width="42" height="42" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke="#ffffff" strokeWidth="2.5" />
-              <circle cx="14" cy="10" r="3" fill="#ffffff" />
-            </svg>
-          </div>
-          <div className="radar-orbit-avatar orb-av-1" title="Factory CFO">
-            <img src="/images/avatar-3.jpg" alt="Factory CFO" />
-          </div>
-          <div className="radar-orbit-avatar orb-av-2" title="Purchase Manager">
-            <img src="/images/avatar-2.jpg" alt="Purchase Manager" />
-          </div>
-          <div className="radar-orbit-avatar orb-av-3" title="GST Compliance Officer">
-            <img src="/images/avatar-5.jpg" alt="GST Compliance Officer" />
-          </div>
-          <div className="radar-orbit-avatar orb-av-4" title="Raw Material Supplier">
-            <img src="/images/avatar-1.jpg" alt="Raw Material Supplier" />
-          </div>
-          <div className="radar-orbit-avatar orb-av-5" title="Accounts Payable">
-            <img src="/images/avatar-4.jpg" alt="Accounts Payable" />
-          </div>
-          <div className="radar-orbit-avatar orb-av-6" title="Udyam MSME Auditor">
-            <img src="/images/avatar-6.jpg" alt="Udyam MSME Auditor" />
-          </div>
-          <div className="radar-status-badge">
-            <span className="live-status-dot" />
-            <span>Active Procurement Radar &bull; 60s GST 2.0 &amp; Landed Cost Guard</span>
+        {/* Hero Radar Centerpiece with Rotating Sweep & Floating Procurement Roles */}
+        <div className="hero-centerpiece-container">
+          <div className="hero-radar-orb">
+            <div className="radar-sweep-beam" aria-hidden="true" />
+            <div className="radar-pulse-ring radar-pulse-1" aria-hidden="true" />
+            <div className="radar-pulse-ring radar-pulse-2" aria-hidden="true" />
+            <div className="radar-core-ring">
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="9" stroke="#ffffff" strokeWidth="2.5" />
+                <circle cx="14" cy="10" r="3" fill="#ffffff" />
+              </svg>
+            </div>
+            <div className="radar-orbit-avatar orb-av-1" title="Factory CFO">
+              <img src="/images/avatar-3.jpg" alt="Factory CFO" />
+            </div>
+            <div className="radar-orbit-avatar orb-av-2" title="Purchase Manager">
+              <img src="/images/avatar-2.jpg" alt="Purchase Manager" />
+            </div>
+            <div className="radar-orbit-avatar orb-av-3" title="GST Compliance Officer">
+              <img src="/images/avatar-5.jpg" alt="GST Compliance Officer" />
+            </div>
+            <div className="radar-orbit-avatar orb-av-4" title="Raw Material Supplier">
+              <img src="/images/avatar-1.jpg" alt="Raw Material Supplier" />
+            </div>
+            <div className="radar-orbit-avatar orb-av-5" title="Accounts Payable">
+              <img src="/images/avatar-4.jpg" alt="Accounts Payable" />
+            </div>
+            <div className="radar-orbit-avatar orb-av-6" title="Udyam MSME Auditor">
+              <img src="/images/avatar-6.jpg" alt="Udyam MSME Auditor" />
+            </div>
+            <div className="radar-status-badge">
+              <span className="live-status-dot" />
+              <span>Active Procurement Radar &bull; 60s GST 2.0 &amp; Landed Cost Guard</span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Primary Studio Command Center Composer (ALWAYS VISIBLE & PROMINENT) */}
-      <div className="studio-composer-container" style={{ maxWidth: 1040, width: '100%', margin: '0 auto 48px' }}>
+      <div className="studio-composer-container">
         {isCaReadOnly && (
           <div className="alert-banner" style={{ background: 'var(--warning-soft)', color: 'var(--warning)', marginBottom: 16 }}>
             <span>
@@ -387,7 +589,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Paperclip size={14} />
-                + Attach Bills / Chats / Audio (Batch)
+                + Attach Bills / Chats / Audio
               </button>
 
               <button
@@ -404,14 +606,6 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 aria-label="Source Channel"
                 value={channel}
                 onChange={(e) => setChannel(e.target.value)}
-                style={{
-                  padding: '5px 8px',
-                  borderRadius: 8,
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-subtle)',
-                  color: 'var(--text-primary)',
-                  fontSize: 12,
-                }}
               >
                 <option value="manual">Channel: Prompt</option>
                 <option value="whatsapp">Channel: WhatsApp</option>
@@ -427,12 +621,12 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               disabled={isCaReadOnly || submitting || (!prompt.trim() && attachedFiles.length === 0)}
             >
               <Send size={14} />
-              {submitting ? batchProgress || 'Auditing & Routing...' : 'Run Procurement Agent •'}
+              {submitting ? batchProgress || 'Auditing & Routing...' : 'Run Procurement Agent'}
             </button>
           </div>
         </form>
 
-        <div className="starter-tabs" role="group" aria-label="One-click starter workflows" style={{ marginTop: 12 }}>
+        <div className="starter-tabs" role="group" aria-label="One-click starter workflows" style={{ marginTop: 14 }}>
           {STARTER_TABS.map((tab) => {
             const Icon = tab.icon;
             return (
@@ -507,7 +701,6 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             <div style={{ fontSize: 12.5, color: 'var(--warning)' }}>{result.asrNote}</div>
           )}
 
-          {/* Missing fields amber notice (Accio Invariant 4: Missing Input != Invented Input) */}
           {result.extracted.missingFields.length > 0 && (
             <div className="row">
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Not stated (left blank, never guessed):</span>
@@ -517,7 +710,6 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
           )}
 
-          {/* Evidence Citations */}
           {result.extracted.evidence.length > 0 && (
             <div className="row">
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Evidence:</span>
@@ -529,7 +721,6 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
           )}
 
-          {/* Audit Verdict if Invoice Audited */}
           {result.created.audit && (
             <div
               className="card"
@@ -553,7 +744,6 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
           )}
 
-          {/* Quote Landed Cost Result */}
           {result.created.quote && (
             <div className="row" style={{ justifyContent: 'space-between', padding: '8px 12px', borderRadius: 8, background: 'var(--bg-subtle)' }}>
               <div>
@@ -599,14 +789,14 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </div>
       )}
 
-      {/* Section 1: Built for Indian Enterprise Scale and Statutory Trust (Matching Frames 010 - 013 of the video) */}
+      {/* Section 1: Built for Indian Enterprise Scale and Statutory Trust (Matching Frames 010 - 012) */}
       {!result && (
-        <section className="enterprise-trust-section" aria-label="Enterprise scale and trust">
+        <section className="enterprise-trust-section scroll-reveal" aria-label="Enterprise scale and trust">
           <div className="section-header-split">
             <div>
-              <h2 className="section-headline">Built for factory scale, statutory compliance, and trust</h2>
+              <h2 className="section-headline">Built for factory scale,<br />statutory compliance, and trust</h2>
               <p className="section-subtext">
-                Kraya handles high-volume quote intake, multi-tier GST 2.0 ITC reconciliation, and Section 43B(h) clocks—ensuring your procurement workflow never loses a single rupee to vendor overpayments or CA tax penalties.
+                Kraya handles high-volume quote intake, multi-tier GST 2.0 ITC reconciliation, and Section 43B(h) clocks—ensuring your procurement workflow never loses a rupee.
               </p>
             </div>
             <button
@@ -615,25 +805,36 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               disabled={isCaReadOnly}
               onClick={focusPromptInput}
             >
-              Run Procurement Agent &bull;
+              Run Procurement Agent <span className="cta-dot" aria-hidden="true" />
             </button>
           </div>
 
           <div className="enterprise-card-grid">
-            {/* Card 1: Landed Cost Normalization on Autopilot */}
-            <div className="showcase-card">
-              <div className="showcase-card-header">
-                <span className="showcase-badge">60s AI Audit</span>
-              </div>
-              <div className="showcase-preview-box">
-                <div className="preview-stat-row">
-                  <span className="pill pill-accent">Landed Cost Audit</span>
-                  <span className="pill">3 Quotes Analyzed</span>
-                  <span className="pill pill-success">Lowest Landed: ₹41.20/kg</span>
-                </div>
-                <div className="row" style={{ alignItems: 'center', gap: 10, marginTop: 8 }}>
-                  <img src="/images/avatar-1.jpg" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover' }} alt="" />
-                  <div className="preview-title" style={{ margin: 0 }}>Shree Balaji Steel &bull; 18% GST ITC + 45d Credit</div>
+            {/* Card 1: Landed Cost Normalization on Autopilot (Centered Circular Badge + 3D Layered Deck) */}
+            <div className="showcase-card scroll-reveal">
+              <div className="showcase-visual-stage">
+                <div className="showcase-circle-badge">60s</div>
+                <div className="layered-quote-deck">
+                  <div className="layered-quote-back" aria-hidden="true">
+                    <span>Apex Fasteners &bull; ₹43.80/kg</span>
+                    <span>30d Credit</span>
+                  </div>
+                  <div className="layered-quote-front">
+                    <div className="layered-quote-top">
+                      <span className="pill-dark-mini">Landed Cost Audit</span>
+                      <span className="layered-quote-meta">3 Quotes Ranked</span>
+                    </div>
+                    <div className="layered-quote-body">
+                      <img src="/images/avatar-1.jpg" className="layered-quote-avatar" alt="" />
+                      <div className="layered-quote-info">
+                        <strong>Shree Balaji Steel</strong>
+                        <span>18% GST ITC &bull; 45d Credit</span>
+                      </div>
+                      <span className="layered-quote-winner">
+                        <span className="winner-dot" /> ₹41.20/kg
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
               <h3>Landed Cost Normalization on Autopilot</h3>
@@ -641,8 +842,9 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
 
             {/* Card 2: Scale That Manual Teams Can't Match */}
-            <div className="showcase-card">
+            <div className="showcase-card scroll-reveal">
               <div className="network-graph-box">
+                <div className="network-radial-backdrop" aria-hidden="true" />
                 <div className="network-center-node">
                   <span>&gt;10k</span>
                 </div>
@@ -652,13 +854,13 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <div className="network-orbit-node net-node-4" title="Tooling"><img src="/images/avatar-4.jpg" alt="" /></div>
                 <div className="network-orbit-node net-node-5" title="Packaging"><img src="/images/avatar-5.jpg" alt="" /></div>
                 <div className="network-orbit-node net-node-6" title="Freight GTA"><img src="/images/avatar-6.jpg" alt="" /></div>
-                <svg className="network-lines-svg" viewBox="0 0 240 240">
-                  <line x1="120" y1="95" x2="60" y2="30" stroke="#bfdbfe" strokeWidth="1.5" strokeDasharray="3 3" />
-                  <line x1="120" y1="95" x2="180" y2="30" stroke="#bfdbfe" strokeWidth="1.5" strokeDasharray="3 3" />
-                  <line x1="120" y1="95" x2="35" y2="95" stroke="#bfdbfe" strokeWidth="1.5" strokeDasharray="3 3" />
-                  <line x1="120" y1="95" x2="205" y2="95" stroke="#bfdbfe" strokeWidth="1.5" strokeDasharray="3 3" />
-                  <line x1="120" y1="95" x2="70" y2="160" stroke="#bfdbfe" strokeWidth="1.5" strokeDasharray="3 3" />
-                  <line x1="120" y1="95" x2="170" y2="160" stroke="#bfdbfe" strokeWidth="1.5" strokeDasharray="3 3" />
+                <svg className="network-lines-svg" viewBox="0 0 280 200" aria-hidden="true">
+                  <path d="M 140 100 L 100 45 L 55 45" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
+                  <path d="M 140 100 L 180 45 L 225 45" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
+                  <path d="M 140 100 L 42 100" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
+                  <path d="M 140 100 L 238 100" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
+                  <path d="M 140 100 L 100 155 L 55 155" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
+                  <path d="M 140 100 L 180 155 L 225 155" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
                 </svg>
               </div>
               <h3>Scale That Manual Teams Can&apos;t Match</h3>
@@ -666,13 +868,13 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
 
             {/* Card 3: Integrations That Just Work */}
-            <div className="showcase-card">
+            <div className="showcase-card scroll-reveal">
               <div className="integration-hub-box">
-                <div className="hub-ripple-ring ring-3" />
-                <div className="hub-ripple-ring ring-2" />
-                <div className="hub-ripple-ring ring-1" />
+                <div className="hub-ripple-ring ring-3" aria-hidden="true" />
+                <div className="hub-ripple-ring ring-2" aria-hidden="true" />
+                <div className="hub-ripple-ring ring-1" aria-hidden="true" />
                 <div className="hub-center-core">
-                  <div className="brand-mark" style={{ width: 44, height: 44 }}>
+                  <div className="brand-mark" style={{ width: 46, height: 46 }}>
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
                       <circle cx="12" cy="12" r="9" stroke="#ffffff" strokeWidth="2.5" />
                       <circle cx="14" cy="10" r="3" fill="#ffffff" />
@@ -690,34 +892,41 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
 
             {/* Card 4: Deterministic Financial Precision */}
-            <div className="showcase-card">
+            <div className="showcase-card scroll-reveal">
               <div className="speedometer-box">
-                <svg width="180" height="110" viewBox="0 0 200 120">
+                <svg width="190" height="120" viewBox="0 0 200 124" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="krayaGaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stopColor="#93c5fd" />
+                      <stop offset="100%" stopColor="#2563eb" />
+                    </linearGradient>
+                  </defs>
                   <path
-                    d="M 20 110 A 80 80 0 0 1 180 110"
+                    d="M 24 108 A 76 76 0 0 1 176 108"
                     fill="none"
                     stroke="#e2e8f0"
                     strokeWidth="14"
                     strokeLinecap="round"
                   />
                   <path
-                    d="M 20 110 A 80 80 0 0 1 160 48"
+                    d="M 24 108 A 76 76 0 0 1 162 52"
                     fill="none"
-                    stroke="#2563eb"
+                    stroke="url(#krayaGaugeGrad)"
                     strokeWidth="14"
                     strokeLinecap="round"
                   />
-                  <circle cx="100" cy="110" r="10" fill="#0f172a" />
                   <line
                     x1="100"
-                    y1="110"
-                    x2="152"
+                    y1="108"
+                    x2="148"
                     y2="52"
                     stroke="#2563eb"
-                    strokeWidth="5"
+                    strokeWidth="6"
                     strokeLinecap="round"
                     className="speedometer-needle-anim"
                   />
+                  <circle cx="100" cy="108" r="10" fill="#1d4ed8" />
+                  <circle cx="100" cy="108" r="4" fill="#ffffff" />
                 </svg>
                 <div className="speedometer-label">
                   <strong>60ms</strong> Latency &bull; 100% Mod-36 Checksum Verified
@@ -730,146 +939,209 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Continuous Enterprise Logo Marquee (Matching Frame 013 of the video) */}
+      {/* Continuous Single-Line Enterprise Logo Marquee (Matching Frame 013) */}
       {!result && (
-        <div className="marquee-banner" aria-label="Trusted by Indian enterprise suppliers">
-          <div className="marquee-title">Fueling Indian manufacturing growth across industrial clusters</div>
-          <div className="marquee-track">
-            <span>&bull; TATA MOTORS SUPPLIERS</span>
-            <span>&bull; APEX PRECISION COMPONENTS</span>
-            <span>&bull; KIRLOSKAR PUMPS NETWORK</span>
-            <span>&bull; BHARAT HEAVY FORGE</span>
-            <span>&bull; MAHINDRA CIE ECOSYSTEM</span>
-            <span>&bull; SUNDRAM FASTENERS</span>
-            <span>&bull; ENDURANCE TECHNOLOGIES</span>
-            <span>&bull; PEENYA INDUSTRIAL CLUSTER</span>
-            <span>&bull; TATA MOTORS SUPPLIERS</span>
-            <span>&bull; APEX PRECISION COMPONENTS</span>
-            <span>&bull; KIRLOSKAR PUMPS NETWORK</span>
-            <span>&bull; BHARAT HEAVY FORGE</span>
-            <span>&bull; MAHINDRA CIE ECOSYSTEM</span>
-            <span>&bull; SUNDRAM FASTENERS</span>
+        <div className="marquee-banner scroll-reveal" aria-label="Trusted by Indian enterprise suppliers">
+          <div className="marquee-header-row">
+            <div className="marquee-title">Fueling Indian manufacturing growth across industrial clusters</div>
+            <button
+              type="button"
+              className="marquee-pause-btn"
+              onClick={() => setMarqueePaused((p) => !p)}
+              aria-label={marqueePaused ? 'Play brand ticker' : 'Pause brand ticker'}
+            >
+              {marqueePaused ? <Play size={12} /> : <Pause size={12} />}
+              <span>{marqueePaused ? 'Play' : 'Pause'}</span>
+            </button>
+          </div>
+          <div className="marquee-track-wrapper">
+            <div className={`marquee-track ${marqueePaused ? 'is-paused' : ''}`}>
+              <span className="marquee-item">&bull; TATA MOTORS SUPPLIERS</span>
+              <span className="marquee-item">&bull; APEX PRECISION COMPONENTS</span>
+              <span className="marquee-item">&bull; KIRLOSKAR PUMPS NETWORK</span>
+              <span className="marquee-item">&bull; BHARAT HEAVY FORGE</span>
+              <span className="marquee-item">&bull; MAHINDRA CIE ECOSYSTEM</span>
+              <span className="marquee-item">&bull; SUNDRAM FASTENERS</span>
+              <span className="marquee-item">&bull; ENDURANCE TECHNOLOGIES</span>
+              <span className="marquee-item">&bull; PEENYA INDUSTRIAL CLUSTER</span>
+              <span className="marquee-item" aria-hidden="true">&bull; TATA MOTORS SUPPLIERS</span>
+              <span className="marquee-item" aria-hidden="true">&bull; APEX PRECISION COMPONENTS</span>
+              <span className="marquee-item" aria-hidden="true">&bull; KIRLOSKAR PUMPS NETWORK</span>
+              <span className="marquee-item" aria-hidden="true">&bull; BHARAT HEAVY FORGE</span>
+              <span className="marquee-item" aria-hidden="true">&bull; MAHINDRA CIE ECOSYSTEM</span>
+              <span className="marquee-item" aria-hidden="true">&bull; SUNDRAM FASTENERS</span>
+              <span className="marquee-item" aria-hidden="true">&bull; ENDURANCE TECHNOLOGIES</span>
+              <span className="marquee-item" aria-hidden="true">&bull; PEENYA INDUSTRIAL CLUSTER</span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Section 2: Before vs After Process Comparison (Matching Frames 016 - 027 of the video) */}
+      {/* Section 2: Scroll-Driven Process Comparison with Sticky Progress Fill Bars (Matching Frames 018 - 027) */}
       {!result && (
-        <section className="process-comparison-section" aria-label="Manual Chaos vs AI Clarity">
-          <div className="process-header">
+        <section
+          ref={processSectionRef}
+          className="process-comparison-section"
+          aria-label="Manual Chaos vs AI Clarity"
+        >
+          <div className="process-header scroll-reveal">
             <span className="process-eyebrow">Manual Chaos &rarr; AI Financial Clarity</span>
-            <h2 className="process-headline">Automate your procurement. Protect factory capital.</h2>
-            <p className="process-subtext">Every calculation, landed cost comparison, and Money Leak metric comes directly from your company's real documents.</p>
+            <h2 className="process-headline">Automate your procurement.<br />Protect factory capital.</h2>
+            <p className="process-subtext">
+              Scroll to compare: watch Kraya finish in 60 seconds while manual procurement takes 112 hours every month.
+            </p>
           </div>
 
           <div className="process-columns-grid">
-            {/* Column 1: Manual Process with Dynamic Hour Counter */}
+            {/* Column 1: Manual Process with Scroll-Driven Dark Fill Bar & Live Hour Counter */}
             <div className="process-col col-manual">
-              <div className="process-col-header">
-                <h3>Manual Process</h3>
-                <span className="badge-hours mono">{manualHours} Hours</span>
+              <div className="process-col-header sticky-progress-header">
+                <div
+                  className="header-progress-fill fill-manual"
+                  style={{ transform: `scaleX(${manualFill})` }}
+                  aria-hidden="true"
+                />
+                <div className="header-bar-content">
+                  <h3 style={{ color: manualFill > 0.35 ? '#ffffff' : '#0f172a' }}>Manual Process</h3>
+                  <div className="header-counter-group">
+                    <span className="badge-hours mono">{manualHoursLive}</span>
+                    <span
+                      className="header-unit-label"
+                      style={{ color: manualFill > 0.88 ? '#ffffff' : '#0f172a' }}
+                    >
+                      Hours
+                    </span>
+                  </div>
+                </div>
               </div>
+
               <div className="process-step-list">
-                <div className="process-step-card">
-                  <div className="step-num">1. Decipher handwritten parchis &amp; WhatsApp chats</div>
-                  <p>Meticulously re-type messy phone notes, WhatsApp audio quotes, and crumpled slips into spreadsheets.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">2. Chase vendors for revised quotes &amp; missing terms</div>
-                  <p>Spend hours playing phone tag to clarify whether freight is included or extra, and who pays GTA tax.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">3. Manually check GST portal for active filing status</div>
-                  <p>Open government GST portal to manually verify GSTIN validity and ensure ITC won't be blocked.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">4. Build complex Excel sheets with mixed tax rates</div>
-                  <p>Manually balance varying GST rates (5%, 12%, 18%), packaging charges, and transit insurance fees.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">5. Guess credit-adjusted cost across different payment terms</div>
-                  <p>Blindly compare 15-day cash discounts with 60-day credit without calculating true WACC cost of capital.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">6. Overlook silent ₹0.50/kg vendor rate creep</div>
-                  <p>Repeat raw material purchases slowly rise in unit rate unnoticed until quarterly accounting audits.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">7. Double GST charged on GTA freight transportation</div>
-                  <p>Transporter levies GST on consignment notes while the supplier also adds GST on the same freight line.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">8. Scramble to reconcile missing e-Invoices &amp; IRNs</div>
-                  <p>Chasing suppliers before GSTR-2B filing deadlines for missing e-way bills and mandatory QR codes.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">9. Risk Section 43B(h) MSME payment disallowance</div>
-                  <p>Delayed payments past 45 days lead to non-deductible tax liabilities and compound penal interest.</p>
-                </div>
-                <div className="process-step-card">
-                  <div className="step-num">10. Manual voucher entry errors into Tally ERP</div>
-                  <p>Typos in ledgers, tax heads, and invoice dates require weeks of painful reconciliation before CA audit.</p>
-                </div>
+                {MANUAL_STEPS.map((step, idx) => {
+                  const threshold = (idx + 0.5) / MANUAL_STEPS.length;
+                  const completed = manualFill >= threshold;
+                  const isCurrent =
+                    manualFill >= idx / MANUAL_STEPS.length &&
+                    manualFill < (idx + 1) / MANUAL_STEPS.length;
+                  return (
+                    <div
+                      key={step.title}
+                      className={`process-step-card ${completed ? 'is-completed' : ''} ${isCurrent ? 'is-current' : ''}`}
+                    >
+                      <div className="step-row-top">
+                        <div className="step-title-group">
+                          <Clock size={15} className="step-lead-icon manual-icon" />
+                          <span className="step-num">{step.title}</span>
+                        </div>
+                        <span
+                          className={`step-check-circle ${completed ? 'checked-manual' : ''}`}
+                          aria-hidden="true"
+                        >
+                          <Check size={11} strokeWidth={3} />
+                        </span>
+                      </div>
+                      <p>{step.desc}</p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Column 2: Kraya AI Process */}
+            {/* Column 2: Kraya AI Process with Fast Royal Blue Fill Bar & Yellow ⚡ Done Pill */}
             <div className="process-col col-ai">
-              <div className="process-col-header">
-                <h3>Kraya AI Process</h3>
-                <div className="row" style={{ gap: 8 }}>
-                  <span className="badge-done">&bull; Verified</span>
-                  <span className="badge-time mono">60 Seconds</span>
+              <div className="process-col-header sticky-progress-header">
+                <div
+                  className="header-progress-fill fill-ai"
+                  style={{ transform: `scaleX(${aiFill})` }}
+                  aria-hidden="true"
+                />
+                <div className="header-bar-content">
+                  <div className="row" style={{ gap: 10 }}>
+                    <h3 style={{ color: aiFill > 0.25 ? '#ffffff' : '#0f172a' }}>Kraya AI Process</h3>
+                    <span className={`badge-done ${aiDone ? 'is-visible' : ''}`}>
+                      <Zap size={11} fill="currentColor" /> Done
+                    </span>
+                  </div>
+                  <div className="header-counter-group">
+                    <span className="badge-hours mono">{aiSecondsLive}</span>
+                    <span
+                      className="header-unit-label"
+                      style={{ color: aiFill > 0.85 ? '#ffffff' : '#0f172a' }}
+                    >
+                      Sec
+                    </span>
+                  </div>
                 </div>
               </div>
+
               <div className="process-step-list">
-                <div className="process-step-card ai-step-card">
-                  <div className="step-num">1. Multimodal Document Ingestion</div>
-                  <p>Drop a WhatsApp quote, bill PDF, handwritten parchi, or Hinglish voice note—parsed instantly with zero typing.</p>
-                </div>
-                <div className="process-step-card ai-step-card">
-                  <div className="step-num">2. Deterministic GST 2.0 &amp; Landed Cost Engine</div>
-                  <p>Validates GSTINs offline with Mod-36 checksums, computes credit-adjusted unit rates, and applies exact WACC.</p>
-                </div>
-                <div className="process-step-card ai-step-card">
-                  <div className="step-num">3. Pre-Payment Money Leak Radar</div>
-                  <p>Exposes duplicate freight GST, silent rate creep, and MSME 43B(h) payment deadlines before cheques are issued.</p>
-                </div>
-                <div className="process-step-card ai-step-card">
-                  <div className="step-num">4. 1-Click WhatsApp Counter-Offer &amp; Tally Export</div>
-                  <p>Auto-generates structured counter-offers and exports verified purchase vouchers directly into Tally XML.</p>
-                </div>
+                {AI_STEPS.map((step, idx) => {
+                  const threshold = (idx + 0.45) / AI_STEPS.length;
+                  const completed = aiFill >= threshold;
+                  const isCurrent =
+                    aiFill >= idx / AI_STEPS.length && aiFill < (idx + 1) / AI_STEPS.length;
+                  return (
+                    <div
+                      key={step.title}
+                      className={`process-step-card ai-step-card ${completed ? 'is-completed-ai' : ''} ${isCurrent ? 'is-current-ai' : ''}`}
+                    >
+                      <div className="step-row-top">
+                        <div className="step-title-group">
+                          <Sparkles size={15} className="step-lead-icon ai-icon" />
+                          <span className="step-num">{step.title}</span>
+                        </div>
+                        <span
+                          className={`step-check-circle ${completed ? 'checked-ai' : ''}`}
+                          aria-hidden="true"
+                        >
+                          <Check size={11} strokeWidth={3} />
+                        </span>
+                      </div>
+                      <p>{step.desc}</p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
         </section>
       )}
 
-      {/* Section 3: Interactive 3-Tab Feature Switcher (Matching Frames 032 - 036 of the video) */}
+      {/* Section 3: Interactive 3-Tab Feature Switcher with Sliding Pill (Matching Frames 032 - 035) */}
       {!result && (
-        <section className="feature-switcher-section" aria-label="Interactive feature workflow">
+        <section className="feature-switcher-section scroll-reveal" aria-label="Interactive feature workflow">
           <h2 className="switcher-headline">
             Kraya ingests, audits, and executes<br />
             procurement—automatically.
           </h2>
-          <div className="switcher-tabs">
+          <div className="switcher-tabs" role="tablist" aria-label="Procurement automation stages">
+            <div
+              className={`switcher-active-pill ${activeFeatureTab === 'negotiate' ? 'pill-green' : 'pill-blue'}`}
+              style={{ transform: `translateX(${switcherIndex * 100}%)` }}
+              aria-hidden="true"
+            />
             <button
               type="button"
-              className={`switcher-tab ${activeFeatureTab === 'intake' ? 'active-blue' : ''}`}
+              role="tab"
+              aria-selected={activeFeatureTab === 'intake'}
+              className={`switcher-tab ${activeFeatureTab === 'intake' ? 'is-active' : ''}`}
               onClick={() => setActiveFeatureTab('intake')}
             >
               Intake
             </button>
             <button
               type="button"
-              className={`switcher-tab ${activeFeatureTab === 'audit' ? 'active-blue' : ''}`}
+              role="tab"
+              aria-selected={activeFeatureTab === 'audit'}
+              className={`switcher-tab ${activeFeatureTab === 'audit' ? 'is-active' : ''}`}
               onClick={() => setActiveFeatureTab('audit')}
             >
               Audit
             </button>
             <button
               type="button"
-              className={`switcher-tab ${activeFeatureTab === 'negotiate' ? 'active-green' : ''}`}
+              role="tab"
+              aria-selected={activeFeatureTab === 'negotiate'}
+              className={`switcher-tab ${activeFeatureTab === 'negotiate' ? 'is-active' : ''}`}
               onClick={() => setActiveFeatureTab('negotiate')}
             >
               Negotiate
@@ -878,7 +1150,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
 
           <div className="switcher-card-container">
             {activeFeatureTab === 'intake' && (
-              <div className="switcher-preview-card anim-fade-in">
+              <div key="intake" className="switcher-preview-card anim-fade-in">
                 <div className="stacked-leads-preview">
                   <div className="lead-row lead-3">
                     <img src="/images/avatar-3.jpg" alt="" />
@@ -901,7 +1173,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               </div>
             )}
             {activeFeatureTab === 'audit' && (
-              <div className="switcher-preview-card anim-fade-in">
+              <div key="audit" className="switcher-preview-card anim-fade-in">
                 <div className="stacked-leads-preview">
                   <div className="lead-row lead-3">
                     <img src="/images/avatar-6.jpg" alt="" />
@@ -924,7 +1196,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               </div>
             )}
             {activeFeatureTab === 'negotiate' && (
-              <div className="switcher-preview-card anim-fade-in">
+              <div key="negotiate" className="switcher-preview-card anim-fade-in">
                 <div className="stacked-leads-preview">
                   <div className="lead-row lead-3">
                     <img src="/images/avatar-1.jpg" alt="" />
@@ -950,9 +1222,9 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 4: Factory Case Studies (Matching Frame 028 of the video) */}
+      {/* Section 4: Working Factory Case Studies Carousel (Matching Frame 028) */}
       {!result && (
-        <section className="case-studies-section" aria-label="Factory case studies">
+        <section className="case-studies-section scroll-reveal" aria-label="Factory case studies">
           <div className="section-header-split">
             <div>
               <h2 className="section-headline">Factory Case Studies</h2>
@@ -965,58 +1237,86 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               className="btn btn-primary pill-cta"
               onClick={() => onNavigate('buying')}
             >
-              See all case studies &bull;
+              See all case studies <span className="cta-dot" aria-hidden="true" />
             </button>
           </div>
 
-          <div className="case-study-card">
-            <div className="case-study-photo-box" style={{ backgroundImage: 'url(/images/director.jpg)', backgroundSize: 'cover', backgroundPosition: 'center' }}>
+          <div key={activeCaseStudy} className="case-study-card anim-fade-in">
+            <div
+              className="case-study-photo-box"
+              style={{ backgroundImage: `url(${currentStory.image})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
+            >
               <div className="case-study-avatar-overlay">
-                <div className="case-study-author">Rajesh Sharma</div>
-                <div className="case-study-role">Managing Director, Apex Precision Castings (Pune)</div>
+                <div className="case-study-author">{currentStory.author}</div>
+                <div className="case-study-role">{currentStory.role}</div>
               </div>
             </div>
             <div className="case-study-content">
               <blockquote className="case-study-quote">
-                &ldquo;Before Kraya, our accounts team was blindsided by freight double-taxation and late MSME payments. Kraya catches rate creep on WhatsApp before our accounts head signs the cheque. It paid for itself in the first 14 days.&rdquo;
+                &ldquo;{currentStory.quote}&rdquo;
               </blockquote>
               <div className="case-study-stats-row">
                 <div className="case-study-stat">
-                  <strong>₹4.8L+</strong>
-                  <span>Annual Money Leaks caught before payment</span>
+                  <strong>{currentStory.stat1Val}</strong>
+                  <span>{currentStory.stat1Label}</span>
                 </div>
                 <div className="case-study-stat">
-                  <strong>100%</strong>
-                  <span>GST 2.0 ITC reconciled with zero CA penalties</span>
+                  <strong>{currentStory.stat2Val}</strong>
+                  <span>{currentStory.stat2Label}</span>
                 </div>
                 <button
                   type="button"
                   className="btn btn-sm pill"
                   style={{ alignSelf: 'center', marginLeft: 'auto' }}
-                  onClick={() => onNavigate('buying')}
+                  onClick={() => onNavigate(currentStory.ctaTab)}
                 >
-                  Open Landed Cost Comparison &bull;
+                  {currentStory.ctaLabel} &bull;
                 </button>
               </div>
             </div>
           </div>
+
           <div className="case-study-nav-row">
-            <div className="carousel-dots">
-              <span className="dot active" />
-              <span className="dot" />
-              <span className="dot" />
+            <div className="carousel-dots" role="tablist" aria-label="Case study slides">
+              {CASE_STUDIES.map((cs, idx) => (
+                <button
+                  key={cs.author}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeCaseStudy === idx}
+                  aria-label={`View case study: ${cs.author}`}
+                  className={`dot ${activeCaseStudy === idx ? 'active' : ''}`}
+                  onClick={() => setActiveCaseStudy(idx)}
+                />
+              ))}
             </div>
             <div className="carousel-arrows">
-              <button type="button" className="arrow-btn" aria-label="Previous story">&lsaquo;</button>
-              <button type="button" className="arrow-btn" aria-label="Next story">&rsaquo;</button>
+              <button
+                type="button"
+                className="arrow-btn"
+                aria-label="Previous story"
+                onClick={() =>
+                  setActiveCaseStudy((prev) => (prev - 1 + CASE_STUDIES.length) % CASE_STUDIES.length)
+                }
+              >
+                &lsaquo;
+              </button>
+              <button
+                type="button"
+                className="arrow-btn"
+                aria-label="Next story"
+                onClick={() => setActiveCaseStudy((prev) => (prev + 1) % CASE_STUDIES.length)}
+              >
+                &rsaquo;
+              </button>
             </div>
           </div>
         </section>
       )}
 
-      {/* Section 5: Customer Testimonials 4-Card Grid (Matching Frame 038 & 040 of the video) */}
+      {/* Section 5: Customer Testimonials 4-Card Grid (Matching Frames 038 & 040) */}
       {!result && (
-        <section className="customer-testimonials-section">
+        <section className="customer-testimonials-section scroll-reveal">
           <div className="section-header-split" style={{ marginBottom: 32 }}>
             <div>
               <h2 className="section-headline">Trusted by Indian manufacturing CFOs &amp; factory owners</h2>
@@ -1029,12 +1329,12 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               className="btn btn-primary pill-cta"
               onClick={() => onNavigate('suppliers')}
             >
-              Get Started &bull;
+              Get Started <span className="cta-dot" aria-hidden="true" />
             </button>
           </div>
 
           <div className="testimonials-grid">
-            <div className="testimonial-portrait-card">
+            <div className="testimonial-portrait-card scroll-reveal">
               <div className="portrait-img-box">
                 <img src="/images/avatar-1.jpg" alt="Vikram Patel" />
               </div>
@@ -1044,7 +1344,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <span>Head of Procurement, Gujarat Polychem</span>
               </div>
             </div>
-            <div className="testimonial-portrait-card">
+            <div className="testimonial-portrait-card scroll-reveal">
               <div className="portrait-img-box">
                 <img src="/images/avatar-2.jpg" alt="Ananya Deshmukh" />
               </div>
@@ -1054,7 +1354,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <span>CFO, Pune Auto Assemblies</span>
               </div>
             </div>
-            <div className="testimonial-portrait-card">
+            <div className="testimonial-portrait-card scroll-reveal">
               <div className="portrait-img-box">
                 <img src="/images/avatar-5.jpg" alt="K. Ramanathan" />
               </div>
@@ -1064,7 +1364,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <span>Managing Partner, Coimbatore Foundry Works</span>
               </div>
             </div>
-            <div className="testimonial-portrait-card">
+            <div className="testimonial-portrait-card scroll-reveal">
               <div className="portrait-img-box">
                 <img src="/images/avatar-3.jpg" alt="Siddharth Jain" />
               </div>
@@ -1079,7 +1379,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
       )}
 
       {/* Section 6: Live Money Leak Radar & Savings Impact */}
-      <section className="savings-radar-section" aria-label="Savings and Money Leak Radar">
+      <section className="savings-radar-section scroll-reveal" aria-label="Savings and Money Leak Radar">
         <div className="savings-split-container">
           <div className="savings-left-panel">
             <div className="radar-tag-row">
@@ -1181,16 +1481,16 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 className="btn btn-primary summary-action-btn"
                 onClick={() => onNavigate('daily')}
               >
-                Inspect Audit Pack •
+                Inspect Audit Pack <span className="cta-dot" aria-hidden="true" />
               </button>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Section 7: Transparent Factory Compliance Tiers (Matching Frame 038 of the video) */}
+      {/* Section 7: Transparent Factory Compliance Tiers (Matching Frame 038) */}
       {!result && (
-        <section className="pricing-tiers-section" aria-label="Compliance tiers">
+        <section className="pricing-tiers-section scroll-reveal" aria-label="Compliance tiers">
           <div className="section-header-split">
             <div>
               <h2 className="section-headline">Simple, transparent factory compliance tiers</h2>
@@ -1203,12 +1503,12 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               className="btn btn-primary pill-cta"
               onClick={() => onNavigate('suppliers')}
             >
-              Start Free Trial &bull;
+              Start Free Trial <span className="cta-dot" aria-hidden="true" />
             </button>
           </div>
 
           <div className="pricing-grid">
-            <div className="pricing-card card-light">
+            <div className="pricing-card card-light scroll-reveal">
               <div className="pricing-tier-name">Growth Factory</div>
               <div className="pricing-price">
                 <span className="price-amount">₹9,999</span>
@@ -1230,7 +1530,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               </button>
             </div>
 
-            <div className="pricing-card card-dark">
+            <div className="pricing-card card-dark scroll-reveal">
               <div className="pricing-tier-name">Enterprise CFO</div>
               <div className="pricing-price">
                 <span className="price-amount">₹24,999</span>
@@ -1255,9 +1555,9 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 8: Knowledge Base / Compliance Guides Triad (Matching Frame 042 of the video) */}
+      {/* Section 8: Knowledge Base / Compliance Guides Triad (Matching Frame 042) */}
       {!result && (
-        <section className="blog-section" aria-label="Knowledge Base and Resources">
+        <section className="blog-section scroll-reveal" aria-label="Knowledge Base and Resources">
           <div className="blog-featured-card">
             <div className="blog-featured-img">
               <img src="/images/office.jpg" alt="Accounts and finance workspace" />
@@ -1278,7 +1578,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
           </div>
 
           <div className="blog-grid-triad">
-            <div className="blog-triad-card">
+            <div className="blog-triad-card scroll-reveal">
               <div className="triad-text">
                 <span className="blog-tag">GST 2.0 AUDIT</span>
                 <h4>Stopping Double Freight Taxation: GTA vs Reverse Charge Explained</h4>
@@ -1289,7 +1589,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               </div>
             </div>
 
-            <div className="blog-triad-card">
+            <div className="blog-triad-card scroll-reveal">
               <div className="triad-text">
                 <span className="blog-tag">SUPPLIER NEGOTIATIONS</span>
                 <h4>5 Proven WhatsApp Negotiation Strategies for Raw Material Procurement</h4>
@@ -1300,7 +1600,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               </div>
             </div>
 
-            <div className="blog-triad-card">
+            <div className="blog-triad-card scroll-reveal">
               <div className="triad-text">
                 <span className="blog-tag">TALLY INTEGRATION</span>
                 <h4>Automating Purchase Vouchers from WhatsApp Quotes into Tally Prime</h4>
@@ -1314,12 +1614,12 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 9: Statutory & Operational FAQs (Matching Frame 042 & 045 of the video) */}
+      {/* Section 9: Statutory & Operational FAQs (Matching Frames 042 & 045) */}
       {!result && (
-        <section className="faq-section" aria-label="Frequently asked questions">
+        <section className="faq-section scroll-reveal" aria-label="Frequently asked questions">
           <div className="faq-header">
             <h2 className="faq-title">Your questions, answered.</h2>
-            <p className="faq-subtitle">Everything you need to know about Indian statutory compliance, ERP integrations, and Kraya's deterministic engine.</p>
+            <p className="faq-subtitle">Everything you need to know about Indian statutory compliance, ERP integrations, and Kraya&apos;s deterministic engine.</p>
           </div>
 
           <div className="faq-list">
@@ -1345,13 +1645,14 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <button
                   type="button"
                   className="faq-question-btn"
+                  aria-expanded={openFaq === idx}
                   onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
                 >
                   <span>{faq.q}</span>
-                  <span className="faq-icon">{openFaq === idx ? '−' : '+'}</span>
+                  <span className="faq-icon" aria-hidden="true">+</span>
                 </button>
                 {openFaq === idx && (
-                  <div className="faq-answer">
+                  <div className="faq-answer anim-fade-in">
                     <p>{faq.a}</p>
                   </div>
                 )}
@@ -1361,9 +1662,9 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 10: Royal Blue CTA Banner (Matching Frame 045 of the video) */}
+      {/* Section 10: Royal Blue CTA Banner (Matching Frame 045) */}
       {!result && (
-        <section className="video-cta-banner">
+        <section className="video-cta-banner scroll-reveal">
           <div className="cta-banner-content">
             <div className="cta-banner-left">
               <h2>Procure Smarter.<br />Protect Factory Capital.</h2>
@@ -1372,7 +1673,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 className="btn btn-cta-light"
                 onClick={focusPromptInput}
               >
-                Run Procurement Agent &bull;
+                Run Procurement Agent <span className="cta-dot cta-dot-blue" aria-hidden="true" />
               </button>
             </div>
             <div className="cta-banner-right">
@@ -1384,8 +1685,8 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         </section>
       )}
 
-      {/* Section 11: Modern Card Footer (Matching Frame 046 of the video) */}
-      <footer className="video-footer-card">
+      {/* Section 11: Modern Card Footer (Matching Frame 046) */}
+      <footer className="video-footer-card scroll-reveal">
         <div className="footer-top-row">
           <div className="footer-brand-column">
             <div className="footer-brand-logo">
@@ -1395,7 +1696,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                   <circle cx="14" cy="10" r="3" fill="#ffffff" />
                 </svg>
               </div>
-              <span className="brand-title" style={{ fontSize: 24, fontWeight: 800, color: '#0f172a' }}>Kraya AI</span>
+              <span className="brand-title">Kraya AI</span>
             </div>
             <div className="subscribe-box">
               <label htmlFor="subscribe-email">SUBSCRIBE FOR STATUTORY COMPLIANCE UPDATES</label>

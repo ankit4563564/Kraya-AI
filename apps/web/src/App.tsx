@@ -453,6 +453,7 @@ export function App() {
               </button>
             )}
           </div>
+          <div className="scroll-progress-bar" aria-hidden="true" />
         </header>
 
         <main className="content-container" key={authMe?.workspaceId || 'ws'}>
