@@ -1,0 +1,107 @@
+{
+  "name": "Kraya — Gmail Vendor PDFs to Unified Inbox",
+  "nodes": [
+    {
+      "id": "gmail-trigger",
+      "name": "Gmail Vendor Inbox",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute",
+              "minute": 5
+            }
+          ]
+        },
+        "filters": {
+          "q": "has:attachment (quote OR quotation OR invoice OR bill OR proforma)"
+        },
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      }
+    },
+    {
+      "id": "prep-payload",
+      "name": "Encode Attachments to Base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst attachments = [];\nif (item.binary) {\n  for (const [key, bin] of Object.entries(item.binary)) {\n    const buf = await this.helpers.getBinaryDataBuffer(0, key);\n    attachments.push({\n      fileName: bin.fileName || key + '.pdf',\n      mimeType: bin.mimeType || 'application/pdf',\n      contentBase64: buf.toString('base64')\n    });\n  }\n}\nreturn [{\n  json: {\n    messageId: item.json.id || item.json.messageId,\n    fromName: item.json.from?.value?.[0]?.name || '',\n    fromEmail: item.json.from?.value?.[0]?.address || item.json.from || '',\n    subject: item.json.subject || '',\n    text: item.json.text || item.json.snippet || '',\n    attachments,\n    timestampSec: String(Math.floor(Date.now() / 1000))\n  }\n}];"
+      }
+    },
+    {
+      "id": "post-kraya",
+      "name": "POST to Kraya Inbound Email Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.KRAYA_API_URL }}/api/webhooks/email-inbound",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "={{ $env.INBOUND_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "x-kraya-workspace-id",
+              "value": "={{ $env.KRAYA_WORKSPACE_ID }}"
+            },
+            {
+              "name": "x-kraya-webhook-timestamp",
+              "value": "={{ $json.timestampSec }}"
+            },
+            {
+              "name": "x-kraya-delivery-id",
+              "value": "={{ $json.messageId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messageId: $json.messageId, fromName: $json.fromName, fromEmail: $json.fromEmail, subject: $json.subject, text: $json.text, attachments: $json.attachments }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Vendor Inbox": {
+      "main": [
+        [
+          {
+            "node": "Encode Attachments to Base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encode Attachments to Base64": {
+      "main": [
+        [
+          {
+            "node": "POST to Kraya Inbound Email Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

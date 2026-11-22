@@ -8,8 +8,11 @@ import {
   FileText,
   Search,
   Download,
+  ArrowRight,
 } from 'lucide-react';
 import { API_BASE, apiJson, UserRole } from '../lib/api';
+import { NavTab } from '../lib/workflow';
+import { NextStepBanner } from '../components/WorkflowJourneyRail';
 
 interface SourceEventRow {
   id: string;
@@ -29,9 +32,11 @@ interface SourceEventRow {
 interface Props {
   userRole: UserRole;
   onDataMutated: () => void;
+  onNavigate?: (tab: NavTab) => void;
+  refreshTick?: number;
 }
 
-export function UnifiedInboxView({ userRole, onDataMutated }: Props) {
+export function UnifiedInboxView({ userRole, onDataMutated, onNavigate, refreshTick = 0 }: Props) {
   const isCaReadOnly = userRole === 'ca';
   const [events, setEvents] = useState<SourceEventRow[]>([]);
   const [filterChannel, setFilterChannel] = useState<string>('all');
@@ -45,7 +50,7 @@ export function UnifiedInboxView({ userRole, onDataMutated }: Props) {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [refreshTick]);
 
   const handleVerify = async (id: string) => {
     await apiJson(`/api/inbox/${id}/verify`, { method: 'PATCH' });
@@ -188,9 +193,34 @@ export function UnifiedInboxView({ userRole, onDataMutated }: Props) {
                   )}
                 </div>
               )}
+              {onNavigate && (
+                <div className="row" style={{ marginTop: 10, justifyContent: 'flex-end' }}>
+                  {evt.pillar === 'invoice_audit' || evt.pillar === 'maintenance_reorder' || evt.pillar === 'daily_followup' ? (
+                    <button type="button" className="btn btn-sm" onClick={() => onNavigate('daily')}>
+                      Continue in Maintenance &amp; Audit <ArrowRight size={12} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-sm" onClick={() => onNavigate('buying')}>
+                      Continue in Buying &amp; RFQs <ArrowRight size={12} aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
+      )}
+
+      {onNavigate && (
+        <NextStepBanner
+          stepLabel="Step 2 → Step 3"
+          title="Verified your incoming chats & bills? Move to Landed Cost & POs"
+          description="All parsed vendor replies automatically populate Buying & RFQs for side-by-side comparison, AI BATNA negotiation, and GST PO issuance."
+          primaryActionLabel="Open Buying & RFQs"
+          onPrimaryAction={() => onNavigate('buying')}
+          secondaryActionLabel="Open Audit & Daily Ops"
+          onSecondaryAction={() => onNavigate('daily')}
+        />
       )}
     </div>
   );

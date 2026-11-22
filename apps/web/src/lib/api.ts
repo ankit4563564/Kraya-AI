@@ -64,21 +64,43 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
     ...((init?.headers as Record<string, string>) || {}),
   };
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  let res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
     headers,
   });
-  const data = await res.json().catch(() => ({}));
+  let data = await res.json().catch(() => ({}));
+
+  // If proxy returned a raw 500/502/503/504 with no structured JSON error (e.g. API server warming up), retry once after 600ms
+  if (
+    !res.ok &&
+    res.status >= 500 &&
+    !(data as { error?: string }).error
+  ) {
+    await new Promise((r) => setTimeout(r, 600));
+    res = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers,
+    });
+    data = await res.json().catch(() => ({}));
+  }
+
   if (!res.ok) {
     if (res.status === 401 && unauthorizedListener && !path.startsWith('/api/auth/')) {
       unauthorizedListener();
     }
     const msg =
-      (data as { error?: string; details?: string[] }).error ||
+      (data as { error?: string; details?: string[]; detail?: string }).error ||
       `Request failed (${res.status})`;
-    const details = (data as { details?: string[] }).details;
-    throw new ApiError(details?.length ? `${msg}: ${details.join('; ')}` : msg, res.status);
+    const details = (data as { details?: string[]; detail?: string }).details;
+    const singleDetail = (data as { detail?: string }).detail;
+    const suffix = details?.length
+      ? `: ${details.join('; ')}`
+      : singleDetail
+        ? `: ${singleDetail}`
+        : '';
+    throw new ApiError(`${msg}${suffix}`, res.status);
   }
   return data as T;
 }

@@ -1,6 +1,7 @@
 import { FreightGstMode, WorkspaceTaxProfile } from '@kraya/finance-engine';
 import { buildKrayaSystemPrompt, wrapUntrustedContent } from './constitution.js';
 import { fetchWithTimeoutAndRetry } from './http-utils.js';
+import { buildGeminiModelCandidates } from './realtime-context.js';
 
 export interface FieldEvidence {
   field: string;
@@ -64,6 +65,8 @@ export interface GeminiExtractOptions {
   textInput: string;
   mediaBase64?: string;
   mediaMimeType?: string;
+  /** Optional focused correction hint passed on an automatic math-reconciliation re-extraction pass */
+  reExtractionHint?: string;
 }
 
 const EXTRACTION_JSON_SCHEMA_INSTRUCTIONS = `
@@ -127,13 +130,15 @@ RULES:
 export async function extractWithGemini(
   opts: GeminiExtractOptions
 ): Promise<ExtractedProcurementPayload> {
-  const model = opts.model || 'gemini-3.5-flash-lite';
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(opts.apiKey)}`;
+  const candidates = buildGeminiModelCandidates(opts.model);
 
   const systemInstruction = buildKrayaSystemPrompt(opts.workspace, opts.policyPatchMd);
+  const hintBlock = opts.reExtractionHint
+    ? `\n\nTARGETED RE-EXTRACTION CHECK (Deterministic Math Auditor found a discrepancy — carefully re-read the exact digits for qty, unit rate, discount, freight, GST %, and totals without inventing values):\n${opts.reExtractionHint}\n`
+    : '';
   const parts: Array<Record<string, unknown>> = [
     {
-      text: `${EXTRACTION_JSON_SCHEMA_INSTRUCTIONS}\n\n${wrapUntrustedContent(opts.channel, opts.textInput || '(See attached media)')}`,
+      text: `${EXTRACTION_JSON_SCHEMA_INSTRUCTIONS}${hintBlock}\n\n${wrapUntrustedContent(opts.channel, opts.textInput || '(See attached media)')}`,
     },
   ];
 
@@ -146,26 +151,43 @@ export async function extractWithGemini(
     });
   }
 
-  const res = await fetchWithTimeoutAndRetry(
-    endpoint,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
+  let res: Response | null = null;
+  let lastErr = '';
+  for (const model of candidates) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(opts.apiKey)}`;
+    try {
+      const attempt = await fetchWithTimeoutAndRetry(
+        endpoint,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+            },
+          }),
         },
-      }),
-    },
-    { timeoutMs: 25_000, maxRetries: 2 }
-  );
+        { timeoutMs: 12_000, maxRetries: 1 }
+      );
+      if (attempt.ok) {
+        res = attempt;
+        break;
+      }
+      lastErr = await attempt.text().catch(() => '');
+      if (![404, 429, 503].includes(attempt.status)) {
+        throw new Error(`Gemini API error (${attempt.status}): ${lastErr.slice(0, 300)}`);
+      }
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+      if (lastErr.startsWith('Gemini API error (')) throw err;
+    }
+  }
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error (${res.status}): ${errText.slice(0, 300)}`);
+  if (!res) {
+    throw new Error(`Gemini API unavailable across models [${candidates.join(', ')}]: ${lastErr.slice(0, 240)}`);
   }
 
   const data = (await res.json()) as {

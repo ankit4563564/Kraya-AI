@@ -1,0 +1,335 @@
+{
+  "name": "Kraya 06 — Full 8-Agent AI Command Center & Constitution 4-Branch PnC Router",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-ai",
+      "name": "Receive AI Procurement Command",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-ai-command-06",
+      "position": [
+        180,
+        320
+      ],
+      "parameters": {
+        "path": "kraya-ai-command",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-http-ai",
+      "name": "Dispatch to Kraya 8-Agent Specialist Fleet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        440,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/agent-run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body || $json) }}",
+        "options": {
+          "timeout": 25000
+        }
+      }
+    },
+    {
+      "id": "kraya-classify-ai",
+      "name": "Classify Accio Constitution & Risk PnC Branch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const res = $input.first().json || {};\nconst rep = res.report || {};\nconst state = String(rep.detectedState || '');\nconst risk = String(rep.riskLevel || 'low');\n\nlet pncBranch = 'clean_advisory_analysis';\nif (state === 'security_threat_blocked' || state === 'prompt_injection_blocked') {\n  pncBranch = 'security_threat_blocked';\n} else if (state === 'gated_execution') {\n  pncBranch = 'gated_execution_requires_approval';\n} else if (risk === 'critical' || risk === 'high') {\n  pncBranch = 'critical_or_high_risk_exposure';\n}\n\nreturn [{ json: { ...res, pncBranch } }];"
+      }
+    },
+    {
+      "id": "kraya-ai-switch",
+      "name": "Route by Agent Verdict PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        960,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "security_threat_blocked",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-security_threat_blocked",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "security_threat_blocked",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "gated_execution_requires_approval",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-gated_execution_requires_approval",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "gated_execution_requires_approval",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "critical_or_high_risk_exposure",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-critical_or_high_risk_exposure",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "critical_or_high_risk_exposure",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-ai-sec",
+      "name": "Enforce Accio Invariant #7 Security Block",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, governanceGate: 'BLOCKED_UNTRUSTED_DIRECTIVE' } }];"
+      }
+    },
+    {
+      "id": "kraya-ai-gate",
+      "name": "Enforce Accio Invariant #3 Human Approval Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        250
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, governanceGate: 'AWAITING_1CLICK_HUMAN_APPROVAL' } }];"
+      }
+    },
+    {
+      "id": "kraya-ai-high",
+      "name": "Surface High-Risk Financial & What-If Mitigation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, governanceGate: 'HIGH_RISK_WHAT_IF_ESCALATED' } }];"
+      }
+    },
+    {
+      "id": "kraya-ai-clean",
+      "name": "Deliver Read-Only Neuro-Symbolic Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        510
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, governanceGate: 'SAFE_READ_ONLY_VERDICT' } }];"
+      }
+    },
+    {
+      "id": "kraya-ai-respond",
+      "name": "Return Specialist Agent Brain Verdict",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        320
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive AI Procurement Command": {
+      "main": [
+        [
+          {
+            "node": "Dispatch to Kraya 8-Agent Specialist Fleet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dispatch to Kraya 8-Agent Specialist Fleet": {
+      "main": [
+        [
+          {
+            "node": "Classify Accio Constitution & Risk PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Accio Constitution & Risk PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Route by Agent Verdict PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Agent Verdict PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Enforce Accio Invariant #7 Security Block",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Enforce Accio Invariant #3 Human Approval Gate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Surface High-Risk Financial & What-If Mitigation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Deliver Read-Only Neuro-Symbolic Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enforce Accio Invariant #7 Security Block": {
+      "main": [
+        [
+          {
+            "node": "Return Specialist Agent Brain Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enforce Accio Invariant #3 Human Approval Gate": {
+      "main": [
+        [
+          {
+            "node": "Return Specialist Agent Brain Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Surface High-Risk Financial & What-If Mitigation": {
+      "main": [
+        [
+          {
+            "node": "Return Specialist Agent Brain Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver Read-Only Neuro-Symbolic Analysis": {
+      "main": [
+        [
+          {
+            "node": "Return Specialist Agent Brain Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

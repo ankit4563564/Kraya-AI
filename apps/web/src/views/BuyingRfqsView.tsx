@@ -13,11 +13,13 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { API_BASE, apiJson, ComplianceFlag, formatINR, SupplierRecord, UserRole } from '../lib/api';
+import { NavTab } from '../lib/workflow';
 import { ModalDialog } from '../components/ModalDialog';
 import { OutreachModalRequest } from '../components/OutreachModal';
 import { SupplierDiscoveryModal } from '../components/SupplierDiscoveryModal';
 import { NegotiationModal, RfqNegotiationData } from '../components/NegotiationModal';
 import { BomBulkImportModal } from '../components/BomBulkImportModal';
+import { NextStepBanner } from '../components/WorkflowJourneyRail';
 
 interface LandedRow {
   quoteId: string;
@@ -85,9 +87,11 @@ interface Props {
   userRole: UserRole;
   onDataMutated: () => void;
   onOpenOutreach: (req: OutreachModalRequest) => void;
+  onNavigate?: (tab: NavTab) => void;
+  refreshTick?: number;
 }
 
-export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Props) {
+export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach, onNavigate, refreshTick = 0 }: Props) {
   const isCaReadOnly = userRole === 'ca';
   const isOwner = userRole === 'owner';
   const [rfqs, setRfqs] = useState<RfqRecord[]>([]);
@@ -162,7 +166,7 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
 
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [refreshTick]);
 
   const handleCreateRfq = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -453,9 +457,35 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
               </div>
             </div>
 
+            {/* Inline 4-Step RFQ Progress Tracker */}
+            <div className="mini-flow-strip" aria-label={`Workflow progress for ${rfq.rfqNumber}`}>
+              <span className="mini-flow-node is-done">1. RFQ Created</span>
+              <span className="mini-flow-sep" aria-hidden="true">→</span>
+              <span className={`mini-flow-node ${rfq.quotesCount > 0 ? 'is-done' : 'is-current'}`}>
+                2. Quotes Logged ({rfq.quotesCount})
+              </span>
+              <span className="mini-flow-sep" aria-hidden="true">→</span>
+              <span className={`mini-flow-node ${rfq.status === 'awarded' || rfq.status === 'closed' ? 'is-done' : rfq.quotesCount >= 2 ? 'is-current' : ''}`}>
+                3. AI Negotiate
+              </span>
+              <span className="mini-flow-sep" aria-hidden="true">→</span>
+              <span className={`mini-flow-node ${rfq.status === 'awarded' || rfq.status === 'closed' ? 'is-done' : rfq.quotesCount >= 1 ? 'is-current' : ''}`}>
+                4. Approve &amp; PO
+              </span>
+              <span className="mini-flow-hint">
+                {rfq.quotesCount === 0
+                  ? 'Next: Source vendors or log 1st quote'
+                  : rfq.quotesCount === 1
+                    ? 'Next: Add a 2nd quote to unlock AI BATNA negotiation, or Approve & PO'
+                    : rfq.status === 'awarded' || rfq.status === 'closed'
+                      ? 'PO issued — track GRN & Invoice below'
+                      : 'Next: Click "Negotiate with AI" or "Approve & PO" on your winner'}
+              </span>
+            </div>
+
             {rfq.comparison.ranked.length === 0 ? (
               <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '8px 0' }}>
-                No quotes logged yet. Paste a vendor WhatsApp reply in <strong>+ New Task</strong> or click <strong>+ Add Quote</strong> above.
+                No quotes logged yet. Paste a vendor WhatsApp reply in the prompt bar above or click <strong>+ Add Quote</strong>.
               </div>
             ) : (
               <>
@@ -634,12 +664,25 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
                     ) · Net {po.paymentTermsDays}d · Delivery Due: {po.deliveryDueAt}
                     {po.cancelReason ? ` · Cancelled: ${po.cancelReason}` : ''}
                   </div>
+                  {po.invoiceStatus !== 'cancelled' && (
+                    <div className="mini-flow-strip" style={{ marginTop: 6, padding: '4px 8px' }}>
+                      <span className="mini-flow-node is-done">1. PO Issued</span>
+                      <span className="mini-flow-sep" aria-hidden="true">→</span>
+                      <span className={`mini-flow-node ${(po.cumulativeAcceptedQty ?? 0) > 0 ? 'is-done' : 'is-current'}`}>
+                        2. GRN {(po.cumulativeAcceptedQty ?? 0) > 0 ? 'Recorded' : 'Pending'}
+                      </span>
+                      <span className="mini-flow-sep" aria-hidden="true">→</span>
+                      <span className={`mini-flow-node ${po.invoiceStatus === 'matched' ? 'is-done' : (po.cumulativeAcceptedQty ?? 0) > 0 ? 'is-current' : ''}`}>
+                        3. Invoice {po.invoiceStatus === 'matched' ? 'Audited' : 'Audit'}
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div className="row">
                   {!isCaReadOnly && po.invoiceStatus !== 'cancelled' && (
                     <button
                       type="button"
-                      className="btn btn-sm"
+                      className={`btn btn-sm ${(po.cumulativeAcceptedQty ?? 0) === 0 ? 'btn-primary' : ''}`}
                       onClick={() => {
                         setLifecycleError(null);
                         setGrnPo(po);
@@ -650,6 +693,15 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
                       }}
                     >
                       Record GRN
+                    </button>
+                  )}
+                  {onNavigate && po.invoiceStatus !== 'cancelled' && po.invoiceStatus !== 'matched' && (po.cumulativeAcceptedQty ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => onNavigate('daily')}
+                    >
+                      Audit Bill →
                     </button>
                   )}
                   {isOwner && po.invoiceStatus !== 'cancelled' && (
@@ -713,6 +765,18 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
           </div>
         )}
       </div>
+
+      {onNavigate && (
+        <NextStepBanner
+          stepLabel="Step 4 & 5 · After PO Approval"
+          title="Next: Track Deliveries, Audit Supplier Invoices & Reconcile GSTR-2B"
+          description="Once goods arrive and you record GRN, audit the vendor bill against your PO to stop GST/freight leaks and export clean Tally/Zoho vouchers."
+          primaryActionLabel="Go to Maintenance, Daily & Audit"
+          onPrimaryAction={() => onNavigate('daily')}
+          secondaryActionLabel="View Supplier Directory"
+          onSecondaryAction={() => onNavigate('suppliers')}
+        />
+      )}
 
       {/* Create RFQ Modal */}
       <ModalDialog

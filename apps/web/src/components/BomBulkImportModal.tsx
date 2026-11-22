@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { apiJson } from '../lib/api';
 import { ModalDialog } from './ModalDialog';
@@ -13,13 +13,22 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onImported: () => void;
+  initialCsvText?: string;
 }
 
-export function BomBulkImportModal({ open, onClose, onImported }: Props) {
-  const [csvText, setCsvText] = useState('');
+export function BomBulkImportModal({ open, onClose, onImported, initialCsvText = '' }: Props) {
+  const [csvText, setCsvText] = useState(initialCsvText);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkImportResponse | null>(null);
+
+  useEffect(() => {
+    if (open && initialCsvText) {
+      setCsvText(initialCsvText);
+      setError(null);
+      setResult(null);
+    }
+  }, [open, initialCsvText]);
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

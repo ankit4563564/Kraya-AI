@@ -1,0 +1,350 @@
+{
+  "name": "Kraya 02 — Daily 8:00 AM IST Autonomous Morning Sweep & Priority PnC Router",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-cron-8am",
+      "name": "Daily 8:00 AM IST (Mon-Sat)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        180,
+        220
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 2 * * 1-6"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "kraya-wh-sweep",
+      "name": "Manual / API Trigger Morning Sweep",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-morning-sweep-02",
+      "position": [
+        180,
+        380
+      ],
+      "parameters": {
+        "path": "kraya-run-morning-sweep",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-http-sweep",
+      "name": "Trigger Kraya All-Workspace Morning Sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/cron/morning-sweep",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-cron-secret",
+              "value": "f7ca9932f3dfeeb6d1741295a8f41232fda7b048624f93e4"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      }
+    },
+    {
+      "id": "kraya-run-comp-brief",
+      "name": "Run Agent 6 (Compliance Tax Shield) Snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/agent-run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workspaceId: ($json.results?.[0]?.workspaceId || \"\"), agentId: \"compliance\", skipNetwork: true }) }}",
+        "options": {
+          "timeout": 12000
+        }
+      }
+    },
+    {
+      "id": "kraya-classify-sweep",
+      "name": "Classify Morning Priority PnC State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        950,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const sweep = $(\"Trigger Kraya All-Workspace Morning Sweep\").item.json || {};\nconst comp = $input.first().json || {};\nconst clock = comp.report?.realTimeContextUsed || {};\nconst state = String(comp.report?.detectedState || 'fully_compliant');\nconst tasksCreated = Number(sweep.totalTasksCreated ?? 0);\n\nlet pncBranch = 'steady_state_all_clean';\nif (state === 'march31_43bh_emergency' || state === 'rule37_reversal_imminent' || comp.report?.riskLevel === 'critical') {\n  pncBranch = 'statutory_tax_cliff_emergency';\n} else if (tasksCreated > 0 || state !== 'fully_compliant') {\n  pncBranch = 'operational_followups_queued';\n}\n\nreturn [{\n  json: {\n    ok: Boolean(sweep.ok),\n    pncBranch,\n    ranAt: sweep.ranAt || new Date().toISOString(),\n    workspacesSwept: sweep.workspacesSwept ?? 0,\n    totalTasksCreated: tasksCreated,\n    financialYear: clock.financialYear || 'FY 2026-27',\n    daysToMarch31TaxCliff: clock.daysToMarch31TaxCliff ?? null,\n    isMarch31MsmeRedZone: Boolean(clock.isMarch31MsmeRedZone),\n    complianceState: state,\n    complianceHeadline: comp.report?.headline || 'Compliance verified',\n    results: sweep.results || []\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-sweep-switch",
+      "name": "Route by Morning Sweep PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1180,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "statutory_tax_cliff_emergency",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-statutory_tax_cliff_emergency",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "statutory_tax_cliff_emergency",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "operational_followups_queued",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-operational_followups_queued",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "operational_followups_queued",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-sweep-crit",
+      "name": "Format Statutory Tax Cliff Emergency Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, priorityLevel: 'CRITICAL', digest: `🚨 STATUTORY TAX CLIFF (${d.financialYear}): ${d.complianceHeadline}. Queued ${d.totalTasksCreated} urgent follow-up(s). Prioritize MSME Section 43B(h) & Rule 37 RTGS payouts today.` } }];"
+      }
+    },
+    {
+      "id": "kraya-sweep-ops",
+      "name": "Format Operational Expeditor & KYC Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, priorityLevel: 'ACTION_NEEDED', digest: `📋 Kraya 8:00 AM Ops Brief (${d.financialYear}): Swept ${d.workspacesSwept} workspace(s), queued ${d.totalTasksCreated} follow-up(s) (overdue PO deliveries, stale RFQs, AMC renewals, KYC).` } }];"
+      }
+    },
+    {
+      "id": "kraya-sweep-clean",
+      "name": "Format Clean Steady-State Morning Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, priorityLevel: 'CALM', digest: `✅ Kraya 8:00 AM Steady State (${d.financialYear}): All ${d.workspacesSwept} workspace(s) clean. Zero overdue deliveries or MSME 43B(h) cliffs.` } }];"
+      }
+    },
+    {
+      "id": "kraya-sweep-respond",
+      "name": "Return Morning CFO Digest",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1700,
+        300
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 8:00 AM IST (Mon-Sat)": {
+      "main": [
+        [
+          {
+            "node": "Trigger Kraya All-Workspace Morning Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual / API Trigger Morning Sweep": {
+      "main": [
+        [
+          {
+            "node": "Trigger Kraya All-Workspace Morning Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Kraya All-Workspace Morning Sweep": {
+      "main": [
+        [
+          {
+            "node": "Run Agent 6 (Compliance Tax Shield) Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Agent 6 (Compliance Tax Shield) Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Classify Morning Priority PnC State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Morning Priority PnC State": {
+      "main": [
+        [
+          {
+            "node": "Route by Morning Sweep PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Morning Sweep PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Format Statutory Tax Cliff Emergency Plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Operational Expeditor & KYC Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Clean Steady-State Morning Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Statutory Tax Cliff Emergency Plan": {
+      "main": [
+        [
+          {
+            "node": "Return Morning CFO Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Operational Expeditor & KYC Queue": {
+      "main": [
+        [
+          {
+            "node": "Return Morning CFO Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Clean Steady-State Morning Brief": {
+      "main": [
+        [
+          {
+            "node": "Return Morning CFO Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

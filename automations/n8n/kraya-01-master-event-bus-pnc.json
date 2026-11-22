@@ -1,0 +1,471 @@
+{
+  "name": "Kraya 01 — Real-Time Event Bus (Money Leaks, Risk Drops, POs & 43B-h Alerts)",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-events",
+      "name": "Kraya Signed Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-events-bus-01",
+      "position": [
+        160,
+        340
+      ],
+      "parameters": {
+        "path": "kraya-events",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-guard-classify",
+      "name": "Validate Envelope & Classify 5-Way PnC Branch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        340
+      ],
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst headers = input.headers || {};\nconst body = input.body || input;\nconst eventType = String(body.eventType || headers['x-kraya-event'] || 'connector.test');\nconst payload = body.payload || body;\nconst workspaceId = String(body.workspaceId || payload.workspaceId || '');\nconst deliveryId = String(body.deliveryId || headers['x-kraya-delivery-id'] || ('dlv_' + Date.now()));\nconst sigHeader = String(headers['x-kraya-signature-256'] || '');\nconst leakRupees = Math.round((Number(payload.totalMoneyLeakPaise || 0) / 100) * 100) / 100;\n\nlet branch = 'info_or_test';\nlet severity = 'INFO';\nif (\n  eventType === 'invoice.leak_detected' ||\n  eventType === 'msme.43bh_cliff' ||\n  eventType === 'gstn.cancelled_alert' ||\n  eventType === 'agent.critical_escalation'\n) {\n  branch = 'critical_escalation';\n  severity = 'CRITICAL';\n} else if (eventType === 'supplier.risk_drop_detected') {\n  branch = 'supplier_risk_fallback';\n  severity = 'HIGH';\n} else if (eventType === 'invoice.clean_ready_to_pay') {\n  branch = 'clean_erp_sync';\n  severity = 'ACTIONABLE';\n} else if (\n  eventType === 'po.approved' ||\n  eventType === 'po.amended' ||\n  eventType === 'po.cancelled' ||\n  eventType === 'grn.received' ||\n  eventType === 'contract.redline_required' ||\n  eventType === 'pr.approval_required' ||\n  eventType === 'feedback.reliability_updated'\n) {\n  branch = 'po_lifecycle';\n  severity = 'NORMAL';\n}\n\nreturn [{\n  json: {\n    deliveryId,\n    eventType,\n    branch,\n    severity,\n    workspaceId,\n    signaturePresent: Boolean(sigHeader),\n    leakRupees,\n    payload,\n    receivedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-switch",
+      "name": "Route by Procurement Event PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        650,
+        340
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "critical_escalation",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-critical_escalation",
+                    "leftValue": "={{ $json.branch }}",
+                    "rightValue": "critical_escalation",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "supplier_risk_fallback",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-supplier_risk_fallback",
+                    "leftValue": "={{ $json.branch }}",
+                    "rightValue": "supplier_risk_fallback",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "clean_erp_sync",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-clean_erp_sync",
+                    "leftValue": "={{ $json.branch }}",
+                    "rightValue": "clean_erp_sync",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "po_lifecycle",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-po_lifecycle",
+                    "leftValue": "={{ $json.branch }}",
+                    "rightValue": "po_lifecycle",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-call-compliance",
+      "name": "Run Kraya Compliance Tax Shield Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        920,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/agent-run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workspaceId: $json.workspaceId, agentId: \"compliance\", skipNetwork: true }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "kraya-merge-crit",
+      "name": "Assemble Critical Escalation Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        80
+      ],
+      "parameters": {
+        "jsCode": "const evt = $(\"Validate Envelope & Classify 5-Way PnC Branch\").item.json;\nconst comp = $input.first().json || {};\nconst fallbackAlert = `🚨 [${evt.severity}] Kraya ${evt.eventType}: ₹${evt.leakRupees.toFixed(2)} exposure on ${evt.payload.invoiceNumber || evt.payload.disruptedSupplier || 'record'}. Action: ${evt.payload.imsSuggestedAction || 'HOLD & ESCALATE'}. ${evt.payload.cfoVerdict || evt.payload.headline || ''}`.trim();\nreturn [{\n  json: {\n    ok: true,\n    receivedBy: 'n8n-kraya-master-bus',\n    pncBranch: evt.branch,\n    deliveryId: evt.deliveryId,\n    eventType: evt.eventType,\n    severity: evt.severity,\n    workspaceId: evt.workspaceId,\n    leakRupees: evt.leakRupees,\n    aiEscalationBrief: fallbackAlert,\n    complianceAgentState: comp.report?.detectedState || 'checked',\n    complianceRiskLevel: comp.report?.riskLevel || 'high',\n    processedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-chain-risk",
+      "name": "Auto-Chain to Kraya 07 Supplier Risk & Fallback Sourcing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        920,
+        210
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operation: \"risk_sourcing_pnc\", workspaceId: $json.workspaceId, supplierName: $json.payload.supplierName, newFinancialHealthScore: $json.payload.newFinancialHealthScore || 41 }) }}",
+        "options": {
+          "timeout": 12000
+        }
+      }
+    },
+    {
+      "id": "kraya-format-risk-chain",
+      "name": "Assemble Risk Fallback Chain Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        210
+      ],
+      "parameters": {
+        "jsCode": "const evt = $(\"Validate Envelope & Classify 5-Way PnC Branch\").item.json;\nconst r = $input.first().json || {};\nreturn [{\n  json: {\n    ok: true,\n    receivedBy: 'n8n-kraya-master-bus',\n    pncBranch: evt.branch,\n    deliveryId: evt.deliveryId,\n    eventType: evt.eventType,\n    chainedToRiskSourcing: Boolean(r.ok),\n    alternativesShortlisted: r.assessment?.alternativeSuppliers?.length || 0,\n    triggeredRfqId: r.triggeredRfqId || null,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-chain-erp",
+      "name": "Auto-Chain to Kraya 03 Omni-ERP Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        920,
+        340
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operation: \"erp_p2p_pnc\", workspaceId: $json.workspaceId, payload: $json.payload }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "kraya-format-clean",
+      "name": "Assemble Clean ERP Chain Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        340
+      ],
+      "parameters": {
+        "jsCode": "const evt = $(\"Validate Envelope & Classify 5-Way PnC Branch\").item.json;\nconst erp = $input.first().json || {};\nreturn [{\n  json: {\n    ok: true,\n    receivedBy: 'n8n-kraya-master-bus',\n    pncBranch: evt.branch,\n    deliveryId: evt.deliveryId,\n    eventType: evt.eventType,\n    workspaceId: evt.workspaceId,\n    chainedToErpSync: Boolean(erp.ok),\n    erpResult: erp,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-format-po",
+      "name": "Format PO, Contract & 43B(h) Lifecycle Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        470
+      ],
+      "parameters": {
+        "jsCode": "const evt = $input.first().json;\nreturn [{\n  json: {\n    ok: true,\n    receivedBy: 'n8n-kraya-master-bus',\n    pncBranch: evt.branch,\n    deliveryId: evt.deliveryId,\n    eventType: evt.eventType,\n    workspaceId: evt.workspaceId,\n    summary: `Lifecycle Event [${evt.eventType}]: ${evt.payload.poNumber || evt.payload.grnNumber || evt.payload.contractNumber || evt.payload.prNumber || 'Recorded'} — 45-day written terms & audit chain protected.`,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-format-default",
+      "name": "Format Test / Info Acknowledgment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const evt = $input.first().json;\nreturn [{\n  json: {\n    ok: true,\n    receivedBy: 'n8n-kraya-master-bus',\n    pncBranch: evt.branch,\n    deliveryId: evt.deliveryId,\n    eventType: evt.eventType,\n    workspaceId: evt.workspaceId,\n    signaturePresent: evt.signaturePresent,\n    message: evt.payload.message || 'Event received and acknowledged cleanly.',\n    processedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-respond",
+      "name": "Respond to Kraya API",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        340
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Kraya Signed Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Envelope & Classify 5-Way PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Envelope & Classify 5-Way PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Route by Procurement Event PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Procurement Event PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Run Kraya Compliance Tax Shield Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Auto-Chain to Kraya 07 Supplier Risk & Fallback Sourcing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Auto-Chain to Kraya 03 Omni-ERP Sync",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format PO, Contract & 43B(h) Lifecycle Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Test / Info Acknowledgment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Kraya Compliance Tax Shield Agent": {
+      "main": [
+        [
+          {
+            "node": "Assemble Critical Escalation Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Critical Escalation Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Kraya API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-Chain to Kraya 07 Supplier Risk & Fallback Sourcing": {
+      "main": [
+        [
+          {
+            "node": "Assemble Risk Fallback Chain Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Risk Fallback Chain Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Kraya API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-Chain to Kraya 03 Omni-ERP Sync": {
+      "main": [
+        [
+          {
+            "node": "Assemble Clean ERP Chain Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Clean ERP Chain Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Kraya API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format PO, Contract & 43B(h) Lifecycle Log": {
+      "main": [
+        [
+          {
+            "node": "Respond to Kraya API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Test / Info Acknowledgment": {
+      "main": [
+        [
+          {
+            "node": "Respond to Kraya API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

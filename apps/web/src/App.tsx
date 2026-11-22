@@ -12,6 +12,8 @@ import {
   LogOut,
   LogIn,
   Eye,
+  Brain,
+  Plug,
 } from 'lucide-react';
 import {
   ApiError,
@@ -35,8 +37,25 @@ import { MaintenanceDailyView } from './views/MaintenanceDailyView';
 import { SuppliersView } from './views/SuppliersView';
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import { OutreachModal, OutreachModalRequest } from './components/OutreachModal';
+import { AgentFleetModal } from './components/AgentFleetModal';
+import { ConnectorHubModal } from './components/ConnectorHubModal';
+import { EnterpriseLifecycleModal } from './components/EnterpriseLifecycleModal';
+import { LegalComplianceModal } from './components/LegalComplianceModal';
+import { SupplierDiscoveryModal } from './components/SupplierDiscoveryModal';
+import { BomBulkImportModal } from './components/BomBulkImportModal';
+import { Gstr2bReconcilerModal } from './components/Gstr2bReconcilerModal';
+import { NegotiationModal, RfqNegotiationData } from './components/NegotiationModal';
+import { WorkflowJourneyRail } from './components/WorkflowJourneyRail';
+import { GlobalPromptDock } from './components/GlobalPromptDock';
+import { GlobalWorkflowTools, NavTab, WorkflowStageDef, WorkflowStageId } from './lib/workflow';
 
-type NavTab = 'new_task' | 'inbox' | 'buying' | 'daily' | 'suppliers';
+const TAB_TITLES: Record<NavTab, string> = {
+  new_task: 'Guided Procurement Studio | Kraya AI',
+  inbox: 'Unified Inbox | Kraya AI',
+  buying: 'Buying, RFQs & Landed Cost | Kraya AI',
+  daily: 'Maintenance, Daily & Invoice Audit | Kraya AI',
+  suppliers: 'My Suppliers | Kraya AI',
+};
 
 const roleBadgeLabel = (role: UserRole): string => {
   switch (role) {
@@ -61,7 +80,27 @@ export function App() {
   const [summary, setSummary] = useState<SummaryStats | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAgentFleet, setShowAgentFleet] = useState(false);
+  const [showConnectors, setShowConnectors] = useState(false);
+  const [showEnterpriseHub, setShowEnterpriseHub] = useState(false);
+  const [legalModalTab, setLegalModalTab] = useState<'plans' | 'dpdp' | 'terms' | null>(null);
   const [outreachReq, setOutreachReq] = useState<OutreachModalRequest | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  // Global workflow modals so prompts work seamlessly from ANY page
+  const [showDiscoverModal, setShowDiscoverModal] = useState(false);
+  const [discoverInitialQuery, setDiscoverInitialQuery] = useState('');
+  const [showBomModal, setShowBomModal] = useState(false);
+  const [bomInitialCsv, setBomInitialCsv] = useState('');
+  const [showGstr2bModal, setShowGstr2bModal] = useState(false);
+  const [showNegotiationModal, setShowNegotiationModal] = useState(false);
+  const [negotiationData, setNegotiationData] = useState<RfqNegotiationData | null>(null);
+  const [prefillPrompt, setPrefillPrompt] = useState<{
+    text: string;
+    channel?: string;
+    stageId?: WorkflowStageId;
+    nonce: number;
+  } | null>(null);
 
   // Detect ?invite= or ?reset= URL params for invite acceptance & password reset flows
   const urlParams = new URLSearchParams(window.location.search);
@@ -95,6 +134,7 @@ export function App() {
   }, []);
 
   const refreshGlobal = useCallback(() => {
+    setRefreshTick((t) => t + 1);
     Promise.all([
       apiJson<WorkspaceProfile>('/api/workspace'),
       apiJson<SummaryStats>('/api/summary'),
@@ -107,6 +147,10 @@ export function App() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    document.title = TAB_TITLES[activeTab] || 'Kraya AI — Procurement CFO';
+  }, [activeTab]);
 
   useEffect(() => {
     setUnauthorizedListener(() => {
@@ -236,6 +280,83 @@ export function App() {
     setMobileMenuOpen(false);
   };
 
+  const handleOpenNegotiationGlobal = async (rfqId?: string): Promise<{ ok: boolean; message?: string }> => {
+    try {
+      let targetId = rfqId;
+      if (!targetId) {
+        const rfqsList = await apiJson<Array<{ id: string; quotesCount: number; status: string }>>('/api/rfqs');
+        const eligible = rfqsList.find((r) => r.quotesCount >= 2 && r.status !== 'closed') ?? rfqsList.find((r) => r.quotesCount >= 2);
+        if (!eligible) {
+          return {
+            ok: false,
+            message:
+              rfqsList.length === 0
+                ? 'No open RFQs found yet. Create an RFQ and log at least 2 supplier quotes first.'
+                : 'Your open RFQ needs at least 2 supplier quotes to calculate BATNA spread and counter-offer targets.',
+          };
+        }
+        targetId = eligible.id;
+      }
+      const data = await apiJson<RfqNegotiationData>(`/api/rfqs/${targetId}/negotiation-strategy`, {
+        method: 'POST',
+      });
+      setNegotiationData(data);
+      setShowNegotiationModal(true);
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        message: err instanceof Error ? err.message : 'Could not load AI negotiation playbook.',
+      };
+    }
+  };
+
+  const workflowTools: GlobalWorkflowTools = {
+    onNavigate: handleSelectNav,
+    onOpenOutreach: setOutreachReq,
+    onOpenDiscover: (initialQuery = '') => {
+      setDiscoverInitialQuery(initialQuery);
+      setShowDiscoverModal(true);
+    },
+    onOpenBomImport: (initialCsv = '') => {
+      setBomInitialCsv(initialCsv);
+      setShowBomModal(true);
+    },
+    onOpenGstr2b: () => setShowGstr2bModal(true),
+    onOpenNegotiation: handleOpenNegotiationGlobal,
+    onDataMutated: refreshGlobal,
+  };
+
+  const handleSelectWorkflowStage = (stage: WorkflowStageDef) => {
+    if (activeTab === stage.primaryTab) {
+      setPrefillPrompt({
+        text: stage.defaultPrompt,
+        channel: stage.channel,
+        stageId: stage.id,
+        nonce: Date.now(),
+      });
+    } else {
+      handleSelectNav(stage.primaryTab);
+      setPrefillPrompt({
+        text: stage.defaultPrompt,
+        channel: stage.channel,
+        stageId: stage.id,
+        nonce: Date.now(),
+      });
+    }
+  };
+
+  const handleRunRecommendedPrompt = (promptText: string, ch: string, targetTab: NavTab) => {
+    if (targetTab !== activeTab) {
+      handleSelectNav(targetTab);
+    }
+    setPrefillPrompt({
+      text: promptText,
+      channel: ch,
+      nonce: Date.now(),
+    });
+  };
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Main navigation">
@@ -358,8 +479,23 @@ export function App() {
             )}
           </div>
 
-          <div style={{ fontSize: 10.5, lineHeight: 1.35 }}>
-            Pre-payment verification &amp; CA audit support. Final GST ITC &amp; 43B(h) filings remain subject to your CA.
+          <div style={{ fontSize: 10.5, lineHeight: 1.45 }}>
+            Pre-payment verification &amp; CA audit support.{' '}
+            <button
+              type="button"
+              style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 10.5 }}
+              onClick={() => setLegalModalTab('plans')}
+            >
+              Plans &amp; Usage
+            </button>{' '}
+            ·{' '}
+            <button
+              type="button"
+              style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 10.5 }}
+              onClick={() => setLegalModalTab('dpdp')}
+            >
+              DPDP &amp; Terms
+            </button>
           </div>
         </div>
       </aside>
@@ -410,6 +546,30 @@ export function App() {
             >
               <Menu size={16} />
             </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setShowAgentFleet(true)}
+              title="Inspect & run all 8 Specialist AI Agent Brains"
+            >
+              <Brain size={13} /> 8 AI Brains
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setShowConnectors(true)}
+              title="Manage n8n workflows, ERP APIs, GSTN, Udyam & external connectors"
+            >
+              <Plug size={13} /> n8n &amp; APIs
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setShowEnterpriseHub(true)}
+              title="Enterprise Lifecycle Hub: D&B Risk Watch, SAP Ariba Catalog, Contract NLP, PR Budgets, Coupa P2P & Data Lake Feedback"
+            >
+              <ShieldCheck size={13} /> Enterprise Lifecycle
+            </button>
             <span className={`leak-counter-pill ${(summary?.totalProtectedPaise ?? 0) > 0 ? 'has-leaks' : ''}`}>
               <ShieldCheck size={14} />
               <span>
@@ -457,6 +617,23 @@ export function App() {
         </header>
 
         <main className="content-container" key={authMe?.workspaceId || 'ws'}>
+          {activeTab !== 'new_task' && (
+            <>
+              <WorkflowJourneyRail
+                summary={summary}
+                activeTab={activeTab}
+                onSelectStage={handleSelectWorkflowStage}
+                onRunRecommendedPrompt={handleRunRecommendedPrompt}
+              />
+              <GlobalPromptDock
+                activeTab={activeTab}
+                summary={summary}
+                userRole={userRole}
+                tools={workflowTools}
+                prefillPrompt={prefillPrompt}
+              />
+            </>
+          )}
           {activeTab === 'new_task' && (
             <NewTaskView
               summary={summary}
@@ -464,16 +641,25 @@ export function App() {
               onDataMutated={refreshGlobal}
               onNavigate={handleSelectNav}
               onOpenOutreach={setOutreachReq}
+              tools={workflowTools}
+              prefillPrompt={prefillPrompt}
             />
           )}
           {activeTab === 'inbox' && (
-            <UnifiedInboxView userRole={userRole} onDataMutated={refreshGlobal} />
+            <UnifiedInboxView
+              userRole={userRole}
+              onDataMutated={refreshGlobal}
+              onNavigate={handleSelectNav}
+              refreshTick={refreshTick}
+            />
           )}
           {activeTab === 'buying' && (
             <BuyingRfqsView
               userRole={userRole}
               onDataMutated={refreshGlobal}
               onOpenOutreach={setOutreachReq}
+              onNavigate={handleSelectNav}
+              refreshTick={refreshTick}
             />
           )}
           {activeTab === 'daily' && (
@@ -481,6 +667,8 @@ export function App() {
               userRole={userRole}
               onDataMutated={refreshGlobal}
               onOpenOutreach={setOutreachReq}
+              onNavigate={handleSelectNav}
+              refreshTick={refreshTick}
             />
           )}
           {activeTab === 'suppliers' && (
@@ -488,6 +676,8 @@ export function App() {
               userRole={userRole}
               onDataMutated={refreshGlobal}
               onOpenOutreach={setOutreachReq}
+              onNavigate={handleSelectNav}
+              refreshTick={refreshTick}
             />
           )}
         </main>
@@ -538,6 +728,59 @@ export function App() {
           setShowAuthModal(false);
           loadAuthenticatedWorkspace();
         }}
+      />
+
+      <AgentFleetModal
+        open={showAgentFleet}
+        onClose={() => setShowAgentFleet(false)}
+      />
+
+      <ConnectorHubModal
+        open={showConnectors}
+        onClose={() => setShowConnectors(false)}
+      />
+
+      <EnterpriseLifecycleModal
+        open={showEnterpriseHub}
+        onClose={() => setShowEnterpriseHub(false)}
+        onMutated={refreshGlobal}
+      />
+
+      <LegalComplianceModal
+        open={legalModalTab !== null}
+        initialTab={legalModalTab || 'plans'}
+        isOwner={userRole === 'owner'}
+        onClose={() => setLegalModalTab(null)}
+      />
+
+      <SupplierDiscoveryModal
+        open={showDiscoverModal}
+        onClose={() => setShowDiscoverModal(false)}
+        initialQuery={discoverInitialQuery}
+        onSupplierAdded={refreshGlobal}
+        onOpenOutreach={setOutreachReq}
+      />
+
+      <BomBulkImportModal
+        open={showBomModal}
+        onClose={() => setShowBomModal(false)}
+        initialCsvText={bomInitialCsv}
+        onImported={() => {
+          refreshGlobal();
+          handleSelectNav('buying');
+        }}
+      />
+
+      <Gstr2bReconcilerModal
+        open={showGstr2bModal}
+        onClose={() => setShowGstr2bModal(false)}
+      />
+
+      <NegotiationModal
+        open={showNegotiationModal}
+        onClose={() => setShowNegotiationModal(false)}
+        data={negotiationData}
+        onOpenOutreach={setOutreachReq}
       />
     </div>
   );

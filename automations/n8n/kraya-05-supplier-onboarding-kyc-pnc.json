@@ -1,0 +1,335 @@
+{
+  "name": "Kraya 05 — 5-Gate Supplier Onboarding, KYC, D&B & ESG 4-Branch PnC Router",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-kyc",
+      "name": "Receive Supplier Onboarding & KYC Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-verify-supplier-05",
+      "position": [
+        180,
+        320
+      ],
+      "parameters": {
+        "path": "kraya-verify-supplier",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-kyc",
+      "name": "Normalize Supplier KYC & ESG Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    ...body,\n    operation: 'onboarding_kyc_pnc'\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-http-kyc",
+      "name": "Run 4-Way Live Registry + 5-Gate Onboarding Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        680,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "kraya-kyc-switch",
+      "name": "Route by Onboarding Gate PnC Outcome",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        940,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "blocked_invalid_gstin_or_insolvent",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-blocked_invalid_gstin_or_insolvent",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "blocked_invalid_gstin_or_insolvent",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "approved_for_po_onboarding_complete",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-approved_for_po_onboarding_complete",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "approved_for_po_onboarding_complete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "compliance_review_required",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-compliance_review_required",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "compliance_review_required",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-kyc-block",
+      "name": "Block Invalid GSTIN or Insolvent Vendor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, verdict: 'BLOCK_INVALID_GSTIN_OR_INSOLVENT', kycScorePct: d.evaluation?.readinessScorePct ?? 20 } }];"
+      }
+    },
+    {
+      "id": "kraya-kyc-approve",
+      "name": "Approve Supplier on Active Vendor Master",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        250
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, verdict: 'APPROVED_FOR_PO', kycScorePct: d.evaluation?.readinessScorePct ?? 100 } }];"
+      }
+    },
+    {
+      "id": "kraya-kyc-review",
+      "name": "Route to Compliance Officer Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, verdict: 'COMPLIANCE_REVIEW_REQUIRED', kycScorePct: d.evaluation?.readinessScorePct ?? 80 } }];"
+      }
+    },
+    {
+      "id": "kraya-kyc-docs",
+      "name": "Draft Missing KYC Docs WhatsApp Chase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        510
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, verdict: 'PARTIAL_KYC_COLLECT_DOCS', kycScorePct: d.evaluation?.readinessScorePct ?? 60 } }];"
+      }
+    },
+    {
+      "id": "kraya-kyc-respond",
+      "name": "Return Full Supplier KYC Scorecard",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1500,
+        320
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Supplier Onboarding & KYC Request": {
+      "main": [
+        [
+          {
+            "node": "Normalize Supplier KYC & ESG Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Supplier KYC & ESG Payload": {
+      "main": [
+        [
+          {
+            "node": "Run 4-Way Live Registry + 5-Gate Onboarding Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run 4-Way Live Registry + 5-Gate Onboarding Engine": {
+      "main": [
+        [
+          {
+            "node": "Route by Onboarding Gate PnC Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Onboarding Gate PnC Outcome": {
+      "main": [
+        [
+          {
+            "node": "Block Invalid GSTIN or Insolvent Vendor",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Approve Supplier on Active Vendor Master",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route to Compliance Officer Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Draft Missing KYC Docs WhatsApp Chase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Block Invalid GSTIN or Insolvent Vendor": {
+      "main": [
+        [
+          {
+            "node": "Return Full Supplier KYC Scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approve Supplier on Active Vendor Master": {
+      "main": [
+        [
+          {
+            "node": "Return Full Supplier KYC Scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route to Compliance Officer Review": {
+      "main": [
+        [
+          {
+            "node": "Return Full Supplier KYC Scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft Missing KYC Docs WhatsApp Chase": {
+      "main": [
+        [
+          {
+            "node": "Return Full Supplier KYC Scorecard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

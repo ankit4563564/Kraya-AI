@@ -1,0 +1,10 @@
+name = "kraya-email-ingress"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# Deploy: cd workers/email-ingress-worker && npx wrangler deploy
+# Set secrets:
+#   npx wrangler secret put KRAYA_API_URL          # e.g. https://kraya-api.<subdomain>.workers.dev
+#   npx wrangler secret put INBOUND_WEBHOOK_SECRET # Must match apps/api INBOUND_WEBHOOK_SECRET
+#   npx wrangler secret put KRAYA_WORKSPACE_ID     # Target workspace ID
+# Then in Cloudflare Dashboard -> Email Routing -> Routing Rules -> Send to Worker: kraya-email-ingress

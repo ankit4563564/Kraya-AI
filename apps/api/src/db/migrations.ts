@@ -421,6 +421,236 @@ CREATE INDEX IF NOT EXISTS idx_credit_notes_ws_inv ON credit_notes(workspace_id,
 CREATE INDEX IF NOT EXISTS idx_audit_logs_ws_seq ON audit_logs(workspace_id, seq_num ASC);
 `,
   },
+  {
+    version: '0004',
+    name: 'agent_brains_gstn_cache_ratelimit',
+    sql: `
+CREATE TABLE IF NOT EXISTS gstn_verifications (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  gstin TEXT NOT NULL,
+  checksum_valid BOOLEAN NOT NULL DEFAULT TRUE,
+  live_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  provider TEXT NOT NULL DEFAULT 'offline_checksum_only',
+  taxpayer_status TEXT NOT NULL DEFAULT 'Unverified',
+  legal_name TEXT,
+  trade_name TEXT,
+  taxpayer_type TEXT NOT NULL DEFAULT 'Unknown',
+  inferred_gst_regime TEXT NOT NULL DEFAULT 'regular',
+  e_invoice_enabled BOOLEAN,
+  registration_date TEXT,
+  cancellation_date TEXT,
+  risk_level TEXT NOT NULL DEFAULT 'warning',
+  risk_flags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_summary_json JSONB,
+  verified_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  cache_expires_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  trigger_source TEXT NOT NULL DEFAULT 'manual',
+  detected_state TEXT NOT NULL,
+  risk_level TEXT NOT NULL DEFAULT 'low',
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 0.9,
+  brain_mode TEXT NOT NULL DEFAULT 'neuro_symbolic_deterministic',
+  headline TEXT NOT NULL,
+  executive_verdict TEXT NOT NULL,
+  report_json JSONB NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rate_limit_hits (
+  id TEXT PRIMARY KEY,
+  bucket_key TEXT NOT NULL,
+  hit_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMP NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_gstn_verifications_ws_gstin ON gstn_verifications(workspace_id, gstin);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_ws_created ON agent_runs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_ws_agent ON agent_runs(workspace_id, agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_hits_bucket_exp ON rate_limit_hits(bucket_key, expires_at);
+`,
+  },
+  {
+    version: '0005',
+    name: 'connectors_automation_hub',
+    sql: `
+CREATE TABLE IF NOT EXISTS automation_webhooks (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'n8n',
+  target_url TEXT NOT NULL,
+  signing_secret TEXT,
+  subscribed_events_json JSONB NOT NULL DEFAULT '["*"]'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS automation_deliveries (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  webhook_id TEXT REFERENCES automation_webhooks(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL DEFAULT 'n8n',
+  event_type TEXT NOT NULL,
+  target_url TEXT NOT NULL,
+  ok BOOLEAN NOT NULL DEFAULT FALSE,
+  http_status INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  response_preview TEXT,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_webhooks_ws ON automation_webhooks(workspace_id, enabled);
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_ws_created ON automation_deliveries(workspace_id, created_at DESC);
+`,
+  },
+  {
+    version: '0006',
+    name: 'saas_plans_billing',
+    sql: `
+CREATE TABLE IF NOT EXISTS workspace_subscriptions (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  plan_code TEXT NOT NULL DEFAULT 'free_pilot',
+  status TEXT NOT NULL DEFAULT 'active',
+  monthly_price_inr INTEGER NOT NULL DEFAULT 0,
+  razorpay_order_id TEXT,
+  razorpay_payment_id TEXT,
+  current_period_start TIMESTAMP NOT NULL DEFAULT NOW(),
+  current_period_end TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+`,
+  },
+  {
+    version: '0007',
+    name: 'enterprise_lifecycle_frameworks',
+    sql: `
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS autonomy_config_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS onboarding_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS financial_health_score INTEGER NOT NULL DEFAULT 80;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS esg_score INTEGER NOT NULL DEFAULT 75;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS risk_status TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS duns_number TEXT;
+ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS last_risk_assessed_at TIMESTAMP;
+
+CREATE TABLE IF NOT EXISTS supplier_risk_events (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  source_provider TEXT NOT NULL DEFAULT 'dnb_risk_feed',
+  event_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'high',
+  previous_financial_score INTEGER,
+  new_financial_score INTEGER,
+  region_or_category TEXT,
+  summary TEXT NOT NULL,
+  recommended_alternatives_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  triggered_rfq_id TEXT REFERENCES rfqs(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS supplier_contracts (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  rfq_id TEXT REFERENCES rfqs(id) ON DELETE SET NULL,
+  po_id TEXT REFERENCES purchase_orders(id) ON DELETE SET NULL,
+  contract_number TEXT NOT NULL,
+  title TEXT NOT NULL,
+  contract_type TEXT NOT NULL DEFAULT 'msa',
+  status TEXT NOT NULL DEFAULT 'under_review',
+  effective_from TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  auto_renew BOOLEAN NOT NULL DEFAULT FALSE,
+  notice_period_days INTEGER NOT NULL DEFAULT 30,
+  contract_value_paise BIGINT NOT NULL DEFAULT 0,
+  raw_contract_text TEXT NOT NULL,
+  clause_risks_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  policy_redlines_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  compliance_score INTEGER NOT NULL DEFAULT 100,
+  file_id TEXT,
+  approved_by TEXT,
+  approved_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS procurement_budgets (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  department TEXT NOT NULL,
+  category TEXT NOT NULL,
+  period_key TEXT NOT NULL,
+  allocated_paise BIGINT NOT NULL,
+  committed_paise BIGINT NOT NULL DEFAULT 0,
+  spent_paise BIGINT NOT NULL DEFAULT 0,
+  hard_stop BOOLEAN NOT NULL DEFAULT TRUE,
+  alert_threshold_pct INTEGER NOT NULL DEFAULT 80,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS purchase_requisitions (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  pr_number TEXT NOT NULL,
+  title TEXT NOT NULL,
+  department TEXT NOT NULL DEFAULT 'Operations',
+  category TEXT NOT NULL DEFAULT 'General',
+  requested_by TEXT NOT NULL,
+  budget_id TEXT REFERENCES procurement_budgets(id) ON DELETE SET NULL,
+  estimated_total_paise BIGINT NOT NULL,
+  items_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  justification TEXT,
+  urgency TEXT NOT NULL DEFAULT 'standard',
+  approval_tier_required TEXT NOT NULL DEFAULT 'tier_1_manager',
+  budget_check_status TEXT NOT NULL DEFAULT 'within_budget',
+  policy_violations_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending_approval',
+  approved_by TEXT,
+  approved_at TIMESTAMP,
+  rejection_reason TEXT,
+  linked_rfq_id TEXT REFERENCES rfqs(id) ON DELETE SET NULL,
+  linked_po_id TEXT REFERENCES purchase_orders(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS supplier_performance_logs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  event_source TEXT NOT NULL,
+  related_entity_id TEXT,
+  on_time_delivery_score INTEGER,
+  quantity_fill_rate_pct DOUBLE PRECISION,
+  invoice_accuracy_score INTEGER,
+  rfq_response_hours DOUBLE PRECISION,
+  previous_reliability_score INTEGER NOT NULL,
+  new_reliability_score INTEGER NOT NULL,
+  notes TEXT,
+  recorded_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contracts_ws_num ON supplier_contracts(workspace_id, contract_number);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_budgets_ws_dept_cat_period ON procurement_budgets(workspace_id, department, category, period_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_prs_ws_num ON purchase_requisitions(workspace_id, pr_number);
+
+CREATE INDEX IF NOT EXISTS idx_risk_events_ws_sup ON supplier_risk_events(workspace_id, supplier_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_contracts_ws_exp ON supplier_contracts(workspace_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_prs_ws_status ON purchase_requisitions(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_perf_logs_ws_sup ON supplier_performance_logs(workspace_id, supplier_id, recorded_at DESC);
+`,
+  },
 ];
 
 export function splitSqlStatements(sqlBlock: string): string[] {

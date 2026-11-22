@@ -12,7 +12,8 @@
     "test:eval": "pnpm --filter @kraya/agent-core test:eval",
     "typecheck": "pnpm -r typecheck",
     "verify:live": "node ./scripts/verify-live-integrations.mjs",
-    "voice:setup": "node ./scripts/setup-voicestudio.mjs"
+    "voice:setup": "node ./scripts/setup-voicestudio.mjs",
+    "n8n:sync": "node --env-file=.env ./scripts/sync-n8n-workflows.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.3",
@@ -21,5 +22,10 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "packageManager": "pnpm@9.15.4"
+  "packageManager": "pnpm@9.15.4",
+  "dependencies": {
+    "@neon/config": "^1.14.6",
+    "@neon/env": "^2.1.9",
+    "@neondatabase/serverless": "^0.10.4"
+  }
 }

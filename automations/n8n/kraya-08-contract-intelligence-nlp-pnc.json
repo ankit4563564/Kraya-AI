@@ -1,0 +1,281 @@
+{
+  "name": "Kraya 08 — NLP Contract Intelligence, Clause Redlining & Expiration Watch PnC",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-cnt",
+      "name": "Receive Draft Supplier Contract for NLP Review",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-contract-nlp-08",
+      "position": [
+        180,
+        300
+      ],
+      "parameters": {
+        "path": "kraya-contract-nlp",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-cnt",
+      "name": "Normalize Contract Text & Terms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    ...body,\n    operation: 'contract_nlp_pnc'\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-exec-cnt",
+      "name": "Run Kraya NLP Contract Intelligence & Policy Redliner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        690,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "kraya-cnt-switch",
+      "name": "Route by Contract Compliance Verdict PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        950,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "critical_statutory_hold_for_redline",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-critical_statutory_hold_for_redline",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "critical_statutory_hold_for_redline",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "commercial_policy_redlines_suggested",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-commercial_policy_redlines_suggested",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "commercial_policy_redlines_suggested",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-cnt-hold",
+      "name": "Hold for Mandatory Section 43B(h) / Statutory Redline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, contractGateAction: 'BLOCKED_UNTIL_STATUTORY_REDLINES_ACCEPTED' } }];"
+      }
+    },
+    {
+      "id": "kraya-cnt-redline",
+      "name": "Attach GST 2.0, ITC Indemnity & SLA Redline Addendum",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, contractGateAction: 'APPROVED_SUBJECT_TO_POLICY_REDLINES' } }];"
+      }
+    },
+    {
+      "id": "kraya-cnt-clean",
+      "name": "Activate Compliant Contract & Arm Expiration Monitor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, contractGateAction: 'CONTRACT_ACTIVE_EXPIRATION_WATCH_ARMED' } }];"
+      }
+    },
+    {
+      "id": "kraya-cnt-respond",
+      "name": "Return Contract Intelligence Report",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1510,
+        300
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Draft Supplier Contract for NLP Review": {
+      "main": [
+        [
+          {
+            "node": "Normalize Contract Text & Terms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Contract Text & Terms": {
+      "main": [
+        [
+          {
+            "node": "Run Kraya NLP Contract Intelligence & Policy Redliner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Kraya NLP Contract Intelligence & Policy Redliner": {
+      "main": [
+        [
+          {
+            "node": "Route by Contract Compliance Verdict PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Contract Compliance Verdict PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Hold for Mandatory Section 43B(h) / Statutory Redline",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Attach GST 2.0, ITC Indemnity & SLA Redline Addendum",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Activate Compliant Contract & Arm Expiration Monitor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hold for Mandatory Section 43B(h) / Statutory Redline": {
+      "main": [
+        [
+          {
+            "node": "Return Contract Intelligence Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach GST 2.0, ITC Indemnity & SLA Redline Addendum": {
+      "main": [
+        [
+          {
+            "node": "Return Contract Intelligence Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activate Compliant Contract & Arm Expiration Monitor": {
+      "main": [
+        [
+          {
+            "node": "Return Contract Intelligence Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

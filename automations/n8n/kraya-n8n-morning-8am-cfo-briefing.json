@@ -1,0 +1,86 @@
+{
+  "name": "Kraya — 8:00 AM IST Morning Sweep & CFO Briefing",
+  "nodes": [
+    {
+      "id": "cron-8am",
+      "name": "Daily 8:00 AM IST Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 2 * * 1-6"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "trigger-sweep",
+      "name": "Trigger Kraya Autonomous Sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.KRAYA_API_URL }}/api/internal/cron/morning-sweep",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-cron-secret",
+              "value": "={{ $env.CRON_SECRET }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send-digest",
+      "name": "Email Morning CFO Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        760,
+        300
+      ],
+      "parameters": {
+        "subject": "=Kraya Morning Procurement Brief — {{ $json.totalTasksCreated }} New Action(s)",
+        "text": "=Morning autonomous sweep completed at {{ $json.ranAt }}.\nWorkspaces swept: {{ $json.workspacesSwept }}\nNew prioritized follow-ups queued: {{ $json.totalTasksCreated }}\n\nOpen Kraya Maintenance & Daily tab to approve 1-click vendor follow-ups."
+      }
+    }
+  ],
+  "connections": {
+    "Daily 8:00 AM IST Schedule": {
+      "main": [
+        [
+          {
+            "node": "Trigger Kraya Autonomous Sweep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Kraya Autonomous Sweep": {
+      "main": [
+        [
+          {
+            "node": "Email Morning CFO Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

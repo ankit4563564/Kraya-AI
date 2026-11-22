@@ -1,0 +1,335 @@
+{
+  "name": "Kraya 09 — Purchase Requisition (PR), Cost-Center Budget Guard & 4-Tier Approval Matrix",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-pr",
+      "name": "Receive Purchase Requisition (PR) Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-pr-budget-09",
+      "position": [
+        180,
+        320
+      ],
+      "parameters": {
+        "path": "kraya-pr-budget-approval",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-pr",
+      "name": "Normalize PR & Cost-Center Budget Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    ...body,\n    operation: 'pr_budget_pnc'\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-exec-pr",
+      "name": "Validate Department Budget & Evaluate Approval Matrix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        690,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "kraya-pr-switch",
+      "name": "Route by 4-Tier Budget & Approval Matrix PnC",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        950,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "exceeds_budget_hard_stop_cfo_board",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-exceeds_budget_hard_stop_cfo_board",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "exceeds_budget_hard_stop_cfo_board",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "tier_2_finance_head_review",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-tier_2_finance_head_review",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "tier_2_finance_head_review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "tier_1_department_manager_approval",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-tier_1_department_manager_approval",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "tier_1_department_manager_approval",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-pr-t3",
+      "name": "Tier 3: Hard-Stop Budget Overrun / CFO & Board Sign-Off",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, routingAction: 'ESCALATED_TO_TIER3_CFO_BOARD_BUDGET_OVERRIDE' } }];"
+      }
+    },
+    {
+      "id": "kraya-pr-t2",
+      "name": "Tier 2: Route to Finance Head (>80% Budget or Mid-Tier Spend)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        250
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, routingAction: 'ROUTED_TO_TIER2_FINANCE_HEAD' } }];"
+      }
+    },
+    {
+      "id": "kraya-pr-t1",
+      "name": "Tier 1: Route to Department Manager Approval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, routingAction: 'ROUTED_TO_TIER1_DEPARTMENT_MANAGER' } }];"
+      }
+    },
+    {
+      "id": "kraya-pr-t0",
+      "name": "Tier 0: Auto-Approved Under Spend Limit & Converted to RFQ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        510
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, routingAction: 'AUTO_APPROVED_BUDGET_COMMITTED_RFQ_CREATED' } }];"
+      }
+    },
+    {
+      "id": "kraya-pr-respond",
+      "name": "Return PR & Budget Decision",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1520,
+        320
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Purchase Requisition (PR) Request": {
+      "main": [
+        [
+          {
+            "node": "Normalize PR & Cost-Center Budget Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize PR & Cost-Center Budget Envelope": {
+      "main": [
+        [
+          {
+            "node": "Validate Department Budget & Evaluate Approval Matrix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Department Budget & Evaluate Approval Matrix": {
+      "main": [
+        [
+          {
+            "node": "Route by 4-Tier Budget & Approval Matrix PnC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by 4-Tier Budget & Approval Matrix PnC": {
+      "main": [
+        [
+          {
+            "node": "Tier 3: Hard-Stop Budget Overrun / CFO & Board Sign-Off",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tier 2: Route to Finance Head (>80% Budget or Mid-Tier Spend)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tier 1: Route to Department Manager Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tier 0: Auto-Approved Under Spend Limit & Converted to RFQ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tier 3: Hard-Stop Budget Overrun / CFO & Board Sign-Off": {
+      "main": [
+        [
+          {
+            "node": "Return PR & Budget Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tier 2: Route to Finance Head (>80% Budget or Mid-Tier Spend)": {
+      "main": [
+        [
+          {
+            "node": "Return PR & Budget Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tier 1: Route to Department Manager Approval": {
+      "main": [
+        [
+          {
+            "node": "Return PR & Budget Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tier 0: Auto-Approved Under Spend Limit & Converted to RFQ": {
+      "main": [
+        [
+          {
+            "node": "Return PR & Budget Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

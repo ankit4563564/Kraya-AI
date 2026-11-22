@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { desc, eq, and, isNull } from 'drizzle-orm';
+import { desc, eq, and, isNull, gt, lt } from 'drizzle-orm';
 import {
   addCalendarDays,
   auditSupplierInvoice,
@@ -51,6 +51,11 @@ import {
   transcribeWithGroqWhisper,
   searchSuppliersRealtime,
   buildNegotiationStrategy,
+  DEFAULT_GEMINI_MODEL,
+  runIntakeForensicsAgent,
+  runSourcingIntelligenceAgent,
+  runNegotiationAgent,
+  runAuditorAgent,
 } from '@kraya/agent-core';
 import {
   DEFAULT_WORKSPACE_ID,
@@ -79,13 +84,28 @@ import {
 import { MAX_UPLOAD_BYTES, PersistentVaultStorage } from './storage.js';
 import {
   buildSecurityHeaders,
+  DistributedRateLimiter,
   extractClientIp,
   sanitizeErrorMessage,
-  SlidingWindowRateLimiter,
 } from './security.js';
 import { registerAuthAndTeamRoutes } from './routes-auth.js';
 import { persistWorkspaceFile, registerFileRoutes } from './routes-files.js';
 import { registerLifecycleRoutes } from './routes-lifecycle.js';
+import { lookupOrVerifyGstin, registerGstnRoutes } from './routes-gstn.js';
+import {
+  buildAgentRuntimeConfig,
+  loadWorkspaceLiveMemory,
+  persistAgentRun,
+  registerAgentRoutes,
+  runAutonomousSweepForWorkspace,
+} from './routes-agents.js';
+import {
+  emitWorkspaceAutomationEvent,
+  registerConnectorRoutes,
+} from './routes-connectors.js';
+import { registerBillingRoutes } from './routes-billing.js';
+import { registerNeonRoutes } from './routes-neon.js';
+import { registerEnterpriseRoutes } from './routes-enterprise.js';
 
 export type { AppEnv };
 
@@ -124,6 +144,7 @@ function toSupplierProfile(s: typeof schema.suppliers.$inferSelect): SupplierTax
 
 const PUBLIC_PATHS = new Set([
   '/api/health',
+  '/api/neon/status',
   '/api/gstin/validate',
   '/api/market/fx-rates',
   '/api/auth/signup',
@@ -138,6 +159,9 @@ const CA_ALLOWED_POST_PATHS = new Set([
   '/api/auth/logout',
   '/api/auth/switch-workspace',
   '/api/gst/gstr2b-reconcile',
+  '/api/gstin/verify-live',
+  '/api/agents/run',
+  '/api/agents/ask',
 ]);
 
 const AUTH_RATE_LIMITED_PATHS = new Set([
@@ -150,7 +174,7 @@ const AUTH_RATE_LIMITED_PATHS = new Set([
 
 export function createApp(envOverride?: Partial<AppEnv>) {
   const app = new Hono<{ Variables: AppVariables }>();
-  const rateLimiter = new SlidingWindowRateLimiter();
+  const rateLimiter = new DistributedRateLimiter();
 
   const getEnv = <K extends keyof AppEnv>(key: K): AppEnv[K] => {
     if (envOverride && envOverride[key] !== undefined) {
@@ -277,7 +301,49 @@ export function createApp(envOverride?: Partial<AppEnv>) {
 
     const bucketKey = isAuthPath ? `auth:${ip}` : `api:${ip}`;
     const limit = isAuthPath ? authLimit : apiLimit;
-    const check = rateLimiter.check(bucketKey, limit, 60_000);
+    const kvBinding = getEnv('RATE_LIMIT_KV');
+    const usePgRateLimit =
+      isAuthPath &&
+      (isProduction() ||
+        getEnv('DISTRIBUTED_RATE_LIMIT') === 'true' ||
+        Boolean(getEnv('DATABASE_URL')?.trim().startsWith('postgres')));
+
+    const pgCheck = usePgRateLimit
+      ? async (key: string, maxHits: number, windowMs: number) => {
+          const db = await getDb(getEnv('DATABASE_URL'));
+          const now = new Date();
+          const cutoff = new Date(now.getTime() - windowMs);
+          await db.delete(schema.rateLimitHits).where(lt(schema.rateLimitHits.expiresAt, now));
+          const recent = await db
+            .select({ hitAt: schema.rateLimitHits.hitAt })
+            .from(schema.rateLimitHits)
+            .where(and(eq(schema.rateLimitHits.bucketKey, key), gt(schema.rateLimitHits.hitAt, cutoff)));
+          if (recent.length >= maxHits) {
+            const oldestMs = recent.reduce((m, r) => Math.min(m, r.hitAt.getTime()), now.getTime());
+            return {
+              allowed: false,
+              remaining: 0,
+              retryAfterSeconds: Math.max(1, Math.ceil((oldestMs + windowMs - now.getTime()) / 1000)),
+            };
+          }
+          await db.insert(schema.rateLimitHits).values({
+            id: uid('rl'),
+            bucketKey: key,
+            hitAt: now,
+            expiresAt: new Date(now.getTime() + windowMs),
+          });
+          return {
+            allowed: true,
+            remaining: Math.max(0, maxHits - (recent.length + 1)),
+            retryAfterSeconds: 0,
+          };
+        }
+      : undefined;
+
+    const check = await rateLimiter.check(bucketKey, limit, 60_000, {
+      kv: kvBinding,
+      pgCheck,
+    });
     if (!check.allowed) {
       c.header('Retry-After', String(check.retryAfterSeconds));
       return c.json(
@@ -297,6 +363,9 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     if (
       PUBLIC_PATHS.has(reqPath) ||
       reqPath.startsWith('/api/webhooks/') ||
+      reqPath.startsWith('/api/internal/cron/') ||
+      reqPath.startsWith('/api/internal/n8n/') ||
+      reqPath === '/api/connectors/n8n/callback' ||
       (c.req.method === 'GET' && /^\/api\/auth\/invitations\/[^/]+$/.test(reqPath))
     ) {
       return next();
@@ -423,10 +492,16 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     return next();
   });
 
-  // Register Auth, Onboarding, Team, Persistent File Vault & Procurement Lifecycle routes
+  // Register Auth, Onboarding, Team, Persistent File Vault, Procurement Lifecycle, Live GSTN, Specialist Agent Fleet & External Connector Hub routes
   registerAuthAndTeamRoutes(app, helpers);
   registerFileRoutes(app, helpers);
   registerLifecycleRoutes(app, helpers);
+  registerGstnRoutes(app, helpers);
+  registerAgentRoutes(app, helpers);
+  registerConnectorRoutes(app, helpers);
+  registerBillingRoutes(app, helpers);
+  registerNeonRoutes(app, helpers);
+  registerEnterpriseRoutes(app, helpers);
 
   // Scoped media download & inline viewing endpoint (P1 local media vault fallback)
   app.get('/api/uploads/:key{.*}', async (c) => {
@@ -697,6 +772,10 @@ export function createApp(envOverride?: Partial<AppEnv>) {
         getEnv('WHATSAPP_ACCESS_TOKEN') && getEnv('WHATSAPP_PHONE_NUMBER_ID')
           ? 'whatsapp_cloud_api_live'
           : 'wa_me_zero_ban_bridge',
+      specialistAgentsCount: 8,
+      morningCronSchedule: '30 2 * * * (08:00 AM IST)',
+      liveGstnApiConfigured: Boolean(getEnv('GSTN_API_KEY') || getEnv('GSTN_API_URL')),
+      rateLimiterMode: getEnv('RATE_LIMIT_KV') ? 'cloudflare_kv' : 'postgres_distributed',
       requireAuth: isAuthRequired(),
       timestamp: new Date().toISOString(),
     });
@@ -1504,12 +1583,32 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       fileBuffer,
     });
     const db = await getDb(getEnv('DATABASE_URL'));
+    let agentReport = null;
+    try {
+      const start = Date.now();
+      const memory = await loadWorkspaceLiveMemory(db, ctx.workspaceId);
+      if (memory) {
+        agentReport = await runIntakeForensicsAgent({
+          promptText,
+          channel,
+          fileName,
+          fileMime,
+          mediaBase64: fileBuffer ? uint8ToBase64(fileBuffer) : undefined,
+          transcriptText: result.sourceEvent.transcriptText,
+          memory,
+          config: buildAgentRuntimeConfig(getEnv, true),
+        });
+        await persistAgentRun(db, ctx.workspaceId, agentReport, 'prompt_ingest', Date.now() - start);
+      }
+    } catch {
+      // Non-blocking agent enrichment
+    }
     await recordAuditLog(db, ctx, 'prompt_ingested', 'source_event', result.sourceEvent.id, {
       channel,
       pillar: result.intake.pillar,
       hasAttachment: Boolean(fileBuffer),
     });
-    return c.json(result);
+    return c.json({ ...result, agentReport });
   });
 
   // =========================================================================
@@ -1761,7 +1860,23 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     });
 
     const strategy = buildNegotiationStrategy(rfq.title, ws?.legalName || 'Our Company', quoteInputs);
-    return c.json(strategy);
+    let agentReport = null;
+    try {
+      const start = Date.now();
+      const memory = await loadWorkspaceLiveMemory(db, wsId);
+      if (memory) {
+        agentReport = await runNegotiationAgent({
+          rfqTitle: rfq.title,
+          quotes: quoteInputs,
+          memory,
+          config: buildAgentRuntimeConfig(getEnv),
+        });
+        await persistAgentRun(db, wsId, agentReport, 'negotiation_api', Date.now() - start);
+      }
+    } catch {
+      // Preserve deterministic strategy even if live refinement fails
+    }
+    return c.json({ ...strategy, agentReport });
   });
 
   // =========================================================================
@@ -2553,7 +2668,87 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       msme43bhDueDate: audit.msme43bhDueDate,
     });
 
-    return c.json({ invoice: savedInv, audit, outreach }, 201);
+    let agentReport = null;
+    try {
+      const start = Date.now();
+      const memory = await loadWorkspaceLiveMemory(db, wsId);
+      if (memory) {
+        const gstinTarget = body.supplierGstinOnBill ?? sup.gstin;
+        const liveGstn = gstinTarget
+          ? (
+              await lookupOrVerifyGstin({
+                db,
+                workspaceId: wsId,
+                rawGstin: gstinTarget,
+                helpers,
+              })
+            ).result
+          : null;
+        agentReport = await runAuditorAgent({
+          auditInput: {
+            invoiceNumber: body.invoiceNumber.trim(),
+            invoiceDate: body.invoiceDate,
+            supplier: toSupplierProfile(sup),
+            supplierGstinOnBill: body.supplierGstinOnBill ?? sup.gstin,
+            irn: body.irn,
+            hasQr: body.hasQr,
+            items: [
+              {
+                itemKey: body.itemKey,
+                description: body.description,
+                hsnSac: body.hsnSac,
+                qty: body.qty,
+                unit: body.unit,
+                unitRateRupees: body.unitRateRupees,
+                gstPct: body.gstPct,
+              },
+            ],
+            freightRupees: body.freightRupees ?? 0,
+            freightGstPct: body.freightGstPct,
+            freightGstMode: body.freightGstMode ?? 'composite_supply',
+            freightAlreadyTaxInclusive: Boolean(body.freightAlreadyTaxInclusive),
+            statedTaxableRupees: body.statedTaxableRupees,
+            statedCgstRupees: body.statedCgstRupees,
+            statedSgstRupees: body.statedSgstRupees,
+            statedIgstRupees: body.statedIgstRupees,
+            statedGrandTotalRupees: body.statedGrandTotalRupees,
+            creditDaysAgreed: sup.creditDays,
+            hasWrittenPo: Boolean(body.poId),
+            poItems: poItemsRef,
+            historicalUnitRatesPaise: hist[0] ? { [body.itemKey]: hist[0].netLandedUnitPaise } : undefined,
+          },
+          liveGstn,
+          grnAcceptedQty: grnAcceptedQtyForItem,
+          invoicedQty: grnAcceptedQtyForItem !== null ? cumulativeBilledQtyBefore + body.qty : body.qty,
+          memory,
+          config: buildAgentRuntimeConfig(getEnv, true),
+        });
+        await persistAgentRun(db, wsId, agentReport, 'invoice_audit', Date.now() - start);
+      }
+    } catch {
+      // Non-blocking agent enrichment
+    }
+
+    // Auto-dispatch signed automation event to configured n8n / Zapier / Make webhooks (non-blocking)
+    void emitWorkspaceAutomationEvent({
+      db,
+      workspaceId: wsId,
+      eventType:
+        audit.totalMoneyLeakPaise > 0 ? 'invoice.leak_detected' : 'invoice.clean_ready_to_pay',
+      payload: {
+        invoiceId: savedInv.id,
+        invoiceNumber: savedInv.invoiceNumber,
+        invoiceDate: savedInv.invoiceDate,
+        supplierId: sup.id,
+        supplierName: sup.name,
+        totalMoneyLeakPaise: audit.totalMoneyLeakPaise,
+        imsSuggestedAction: audit.imsSuggestedAction,
+        cfoVerdict: audit.cfoVerdict,
+      },
+      helpers,
+    });
+
+    return c.json({ invoice: savedInv, audit, outreach, agentReport }, 201);
   });
 
   app.get('/api/leaks', async (c) => {
@@ -2614,6 +2809,11 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       udyamTier?: UdyamTier;
       eInvoiceRequired?: boolean;
       creditDays?: number;
+      reliabilityScore?: number;
+      financialHealthScore?: number;
+      esgScore?: number;
+      dunsNumber?: string;
+      onboardingStatus?: string;
       notes?: string;
     }>();
 
@@ -2644,6 +2844,11 @@ export function createApp(envOverride?: Partial<AppEnv>) {
         udyamTier: body.udyamTier || 'unknown',
         eInvoiceRequired: Boolean(body.eInvoiceRequired),
         creditDays: body.creditDays ?? 30,
+        reliabilityScore: body.reliabilityScore ?? 85,
+        financialHealthScore: body.financialHealthScore ?? 80,
+        esgScore: body.esgScore ?? 75,
+        dunsNumber: body.dunsNumber?.trim() || null,
+        onboardingStatus: body.onboardingStatus?.trim() || 'approved',
         notes: body.notes || null,
       })
       .returning();
@@ -2702,9 +2907,40 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     }
 
     const apiKey = getEnv('GEMINI_API_KEY');
-    const model = getEnv('GEMINI_MODEL') || 'gemini-3.5-flash-lite';
+    const model = getEnv('GEMINI_MODEL') || DEFAULT_GEMINI_MODEL;
     const googleMapsApiKey = getEnv('GOOGLE_MAPS_API_KEY');
     const openCorporatesApiKey = getEnv('OPENCORPORATES_API_KEY');
+
+    const memory = await loadWorkspaceLiveMemory(db, ctx.workspaceId);
+    if (memory) {
+      const start = Date.now();
+      const agentReport = await runSourcingIntelligenceAgent({
+        criteria: {
+          query: body.query.trim(),
+          category: body.category,
+          buyerCity: body.buyerCity || 'Bengaluru',
+          buyerPincode: body.buyerPincode || '560058',
+          buyerStateCode: body.buyerStateCode || buyerProfile?.stateCode || '29',
+          targetRateMaxRupees: body.targetRateMaxRupees,
+          minCreditDays: body.minCreditDays,
+          buyerWaccPct: buyerProfile?.waccPct ?? 14.0,
+          specificCriteria: body.specificCriteria,
+        },
+        memory,
+        config: {
+          ...buildAgentRuntimeConfig(getEnv),
+          geminiApiKey: apiKey,
+          geminiModel: model,
+          googleMapsApiKey,
+          openCorporatesApiKey,
+        },
+      });
+      await persistAgentRun(db, ctx.workspaceId, agentReport, 'supplier_discover', Date.now() - start);
+      return c.json({
+        ...(agentReport.structuredData?.discovery ?? {}),
+        agentReport,
+      });
+    }
 
     const discovery = await searchSuppliersRealtime(
       {
@@ -3488,106 +3724,27 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     const wsId = ctx.workspaceId;
     const db = await getDb(getEnv('DATABASE_URL'));
 
-    const [rfqs, allQuotes, pos, grns, invs, amcs, sups, openTasks] = await Promise.all([
-      db.select().from(schema.rfqs).where(eq(schema.rfqs.workspaceId, wsId)),
-      db.select().from(schema.quotes).where(eq(schema.quotes.workspaceId, wsId)),
-      db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.workspaceId, wsId)),
-      db.select().from(schema.grnReceipts).where(eq(schema.grnReceipts.workspaceId, wsId)),
-      db.select().from(schema.invoices).where(eq(schema.invoices.workspaceId, wsId)),
-      db.select().from(schema.amcSchedules).where(eq(schema.amcSchedules.workspaceId, wsId)),
-      db.select().from(schema.suppliers).where(eq(schema.suppliers.workspaceId, wsId)),
-      db
-        .select()
-        .from(schema.dailyTasks)
-        .where(and(eq(schema.dailyTasks.workspaceId, wsId), eq(schema.dailyTasks.status, 'open'))),
-    ]);
-
-    const supMap = new Map(sups.map((s) => [s.id, s]));
-    const quoteCounts = new Map<string, number>();
-    for (const q of allQuotes) {
-      quoteCounts.set(q.rfqId, (quoteCounts.get(q.rfqId) || 0) + 1);
-    }
-    const fullGrnPoIds = new Set(grns.filter((g) => g.qcStatus === 'accepted').map((g) => g.poId));
-
-    const plan = planAutonomousProcurementSweep({
-      todayIso: todayIso(),
-      rfqs: rfqs.map((r) => ({
-        id: r.id,
-        rfqNumber: r.rfqNumber,
-        title: r.title,
-        status: r.status,
-        quoteCount: quoteCounts.get(r.id) || 0,
-        createdAt: r.createdAt,
-      })),
-      pos: pos.map((p) => ({
-        id: p.id,
-        poNumber: p.poNumber,
-        supplierId: p.supplierId,
-        supplierName: supMap.get(p.supplierId)?.name || 'Supplier',
-        deliveryDueAt: p.deliveryDueAt,
-        invoiceStatus: p.invoiceStatus,
-        cancelledAt: p.cancelledAt,
-        hasFullGrn: fullGrnPoIds.has(p.id),
-      })),
-      invoices: invs.map((i) => ({
-        id: i.id,
-        invoiceNumber: i.invoiceNumber,
-        supplierId: i.supplierId,
-        supplierName: supMap.get(i.supplierId)?.name || 'Supplier',
-        grandTotalPaise: i.grandTotalPaise,
-        msme43bhDueAt: i.msme43bhDueAt,
-        rule37CliffAt: i.rule37CliffAt,
-        paidAt: i.paidAt,
-      })),
-      amcs: amcs.map((a) => ({
-        id: a.id,
-        assetName: a.assetName,
-        supplierId: a.supplierId,
-        supplierName: a.supplierId ? supMap.get(a.supplierId)?.name || null : null,
-        nextDueAt: a.nextDueAt,
-        status: a.status,
-      })),
-      suppliers: sups.map((s) => ({
-        id: s.id,
-        name: s.name,
-        phone: s.phone,
-        email: s.email,
-        gstin: s.gstin,
-        gstRegime: s.gstRegime,
-        udyamTier: s.udyamTier,
-        creditDays: s.creditDays,
-      })),
-      existingOpenTasks: openTasks.map((t) => ({ kind: t.kind, relatedId: t.relatedId })),
+    const sweep = await runAutonomousSweepForWorkspace({
+      db,
+      workspaceId: wsId,
+      actorEmail: ctx.email,
+      actorRole: ctx.role,
+      triggerSource: 'manual',
+      config: buildAgentRuntimeConfig(getEnv, true),
     });
 
-    const createdTasks = [];
-    for (const task of plan.plannedTasks) {
-      const id = uid('tsk');
-      await db.insert(schema.dailyTasks).values({
-        id,
-        workspaceId: wsId,
-        kind: task.kind,
-        title: task.title,
-        supplierId: task.supplierId,
-        relatedId: task.relatedId,
-        priority: task.priority,
-        dueAt: task.dueAt,
-        suggestedMessage: task.suggestedMessage,
-        status: 'open',
-      });
-      createdTasks.push({ id, ...task });
-    }
-
-    await recordAuditLog(db, ctx, 'autonomous_sweep_executed', 'workspace', wsId, {
-      createdTasksCount: createdTasks.length,
-      summary: plan.summary,
-    });
+    const data = sweep.agentReport.structuredData as {
+      sweepPlan?: { kycScores?: unknown[]; summary?: Record<string, unknown> };
+      escalatedTasks?: unknown[];
+    };
 
     return c.json({
-      createdTasksCount: createdTasks.length,
-      createdTasks,
-      kycScores: plan.kycScores,
-      summary: plan.summary,
+      createdTasksCount: sweep.createdTasksCount,
+      createdTasks: sweep.createdTasks,
+      escalatedTasks: data?.escalatedTasks ?? [],
+      kycScores: data?.sweepPlan?.kycScores ?? [],
+      summary: data?.sweepPlan?.summary ?? {},
+      agentReport: sweep.agentReport,
     });
   });
 
@@ -3934,30 +4091,121 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       return c.json({ error: 'Valid x-kraya-workspace-id header (or WEBHOOK_DEFAULT_WORKSPACE_ID) required.' }, 400);
     }
 
-    const body = await c.req.json<{
-      messageId?: string;
-      fromName?: string;
-      fromEmail?: string;
-      subject?: string;
-      text?: string;
-    }>();
+    const contentType = c.req.header('content-type') || '';
+    let messageId: string | null = null;
+    let fromName = '';
+    let fromEmail = '';
+    let subject = '';
+    let text = '';
+    const parsedAttachments: Array<{ fileName: string; mimeType: string; bytes: Uint8Array }> = [];
+
+    if (contentType.includes('multipart/form-data')) {
+      const form = await c.req.formData();
+      messageId = form.get('messageId') ? String(form.get('messageId')) : null;
+      fromName = String(form.get('fromName') || '');
+      fromEmail = String(form.get('fromEmail') || '');
+      subject = String(form.get('subject') || '');
+      text = String(form.get('text') || '');
+
+      const fileEntries = [...form.getAll('attachment'), ...form.getAll('attachments'), ...form.getAll('file')];
+      for (const entry of fileEntries) {
+        if (entry && typeof entry !== 'string') {
+          const bytes = new Uint8Array(await entry.arrayBuffer());
+          if (bytes.byteLength > 0) {
+            parsedAttachments.push({
+              fileName: entry.name || 'email-attachment.pdf',
+              mimeType: entry.type || 'application/octet-stream',
+              bytes,
+            });
+          }
+        }
+      }
+    } else {
+      const body = await c.req.json<{
+        messageId?: string;
+        fromName?: string;
+        fromEmail?: string;
+        subject?: string;
+        text?: string;
+        attachments?: Array<{
+          fileName?: string;
+          filename?: string;
+          mimeType?: string;
+          contentType?: string;
+          contentBase64?: string;
+          content?: string;
+        }>;
+      }>();
+      messageId = body.messageId || null;
+      fromName = body.fromName || '';
+      fromEmail = body.fromEmail || '';
+      subject = body.subject || '';
+      text = body.text || '';
+
+      if (Array.isArray(body.attachments)) {
+        for (const att of body.attachments) {
+          const b64 = (att.contentBase64 || att.content || '').trim();
+          if (!b64) continue;
+          const cleanB64 = b64.includes(',') ? b64.slice(b64.indexOf(',') + 1) : b64;
+          let bytes: Uint8Array;
+          if (typeof Buffer !== 'undefined') {
+            bytes = new Uint8Array(Buffer.from(cleanB64, 'base64'));
+          } else {
+            const bin = atob(cleanB64);
+            bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          }
+          if (bytes.byteLength > 0) {
+            parsedAttachments.push({
+              fileName: att.fileName || att.filename || 'email-attachment.pdf',
+              mimeType: att.mimeType || att.contentType || 'application/pdf',
+              bytes,
+            });
+          }
+        }
+      }
+    }
 
     const deliveryId =
       c.req.header('x-kraya-delivery-id') ||
       c.req.header('message-id') ||
-      body.messageId ||
+      messageId ||
       null;
     if (await recordWebhookReceiptOrDetectReplay('email', deliveryId, targetWsId)) {
       return c.json({ ok: true, duplicateIgnored: true });
     }
 
     const combined = [
-      body.fromName ? `From: ${body.fromName}.` : body.fromEmail ? `From: ${body.fromEmail}.` : '',
-      body.subject ? `Subject: ${body.subject}.` : '',
-      body.text || '',
+      fromName ? `From: ${fromName}.` : fromEmail ? `From: ${fromEmail}.` : '',
+      subject ? `Subject: ${subject}.` : '',
+      text || '',
     ]
       .filter(Boolean)
       .join('\n');
+
+    // Ingest every PDF/Image/Excel/Audio email attachment (or text-only email if no attachments)
+    if (parsedAttachments.length > 0) {
+      const results = [];
+      for (const att of parsedAttachments) {
+        const res = await runScopedIngest({
+          wsId: targetWsId,
+          userId: null,
+          channel: 'email',
+          promptText: combined || `Inbound email attachment: ${att.fileName}`,
+          targetRfqId: null,
+          fileName: att.fileName,
+          fileMime: att.mimeType,
+          fileBuffer: att.bytes,
+        });
+        results.push(res);
+      }
+      return c.json({
+        ok: true,
+        attachmentsIngested: results.length,
+        ingested: results[0],
+        allIngested: results,
+      });
+    }
 
     const result = await runScopedIngest({
       wsId: targetWsId,
@@ -3969,7 +4217,7 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       fileMime: null,
       fileBuffer: null,
     });
-    return c.json({ ok: true, ingested: result });
+    return c.json({ ok: true, attachmentsIngested: 0, ingested: result });
   });
 
   app.post('/api/webhooks/call-recording', async (c) => {

@@ -85,6 +85,77 @@ export class SlidingWindowRateLimiter {
   }
 }
 
+export interface KvLike {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
+}
+
+/**
+ * Distributed-safe Rate Limiter:
+ * 1. Uses Cloudflare KV when `RATE_LIMIT_KV` is bound (shared across all edge isolates).
+ * 2. Else uses PostgreSQL (`rate_limit_hits`) when `pgCheck` callback is provided (shared across serverless instances).
+ * 3. Falls back cleanly to fast in-memory sliding window.
+ */
+export class DistributedRateLimiter {
+  private readonly local = new SlidingWindowRateLimiter();
+
+  async check(
+    key: string,
+    limit: number,
+    windowMs: number,
+    opts?: {
+      kv?: KvLike;
+      pgCheck?: (key: string, limit: number, windowMs: number) => Promise<{
+        allowed: boolean;
+        remaining: number;
+        retryAfterSeconds: number;
+      }>;
+    }
+  ): Promise<{ allowed: boolean; remaining: number; retryAfterSeconds: number; mode: 'kv' | 'postgres' | 'memory' }> {
+    if (opts?.kv) {
+      try {
+        const now = Date.now();
+        const cutoff = now - windowMs;
+        const raw = await opts.kv.get(`rl:${key}`);
+        const timestamps = raw
+          ? (JSON.parse(raw) as number[]).filter((t) => typeof t === 'number' && t > cutoff)
+          : [];
+        if (timestamps.length >= limit) {
+          const oldest = timestamps[0] ?? now;
+          return {
+            allowed: false,
+            remaining: 0,
+            retryAfterSeconds: Math.max(1, Math.ceil((oldest + windowMs - now) / 1000)),
+            mode: 'kv',
+          };
+        }
+        timestamps.push(now);
+        const ttl = Math.max(60, Math.ceil(windowMs / 1000) + 10);
+        await opts.kv.put(`rl:${key}`, JSON.stringify(timestamps), { expirationTtl: ttl });
+        return {
+          allowed: true,
+          remaining: Math.max(0, limit - timestamps.length),
+          retryAfterSeconds: 0,
+          mode: 'kv',
+        };
+      } catch {
+        // Fall through gracefully
+      }
+    }
+
+    if (opts?.pgCheck) {
+      try {
+        const res = await opts.pgCheck(key, limit, windowMs);
+        return { ...res, mode: 'postgres' };
+      } catch {
+        // Fall through gracefully
+      }
+    }
+
+    return { ...this.local.check(key, limit, windowMs), mode: 'memory' };
+  }
+}
+
 export function extractClientIp(headers: {
   get(name: string): string | undefined | null;
 }): string {

@@ -6,17 +6,29 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 NODE_ENV = "production"
 REQUIRE_AUTH = "true"
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+
+# Autonomous Morning Procurement Sweep — Daily at 08:00 AM IST (02:30 UTC)
+[triggers]
+crons = ["30 2 * * *"]
 
 # Required production secrets (set via `wrangler secret put <NAME>`):
 # - DATABASE_URL (Neon Serverless PostgreSQL connection string)
 # - SESSION_SECRET (32-byte random hex for signed download URLs)
 # - APP_ORIGIN (e.g., https://kraya.pages.dev or https://app.yourdomain.in)
 #
-# Optional AI / Voice / Messaging secrets (`wrangler secret put`):
+# Optional AI / Voice / Messaging / Live GSTN secrets (`wrangler secret put`):
 # - GEMINI_API_KEY, ELEVENLABS_API_KEY, GROQ_API_KEY
+# - GSTN_API_PROVIDER (appyflow | gstzen | mastergst), GSTN_API_KEY, GSTN_API_URL
+# - UDYAM_API_PROVIDER (surepass | sandbox_co_in), UDYAM_API_KEY, UDYAM_API_URL
+# - GOOGLE_MAPS_API_KEY, SERPER_API_KEY, TAVILY_API_KEY, OPENCORPORATES_API_KEY
+# - ZOHO_BOOKS_ACCESS_TOKEN, ZOHO_BOOKS_ORG_ID, ZOHO_BOOKS_API_DOMAIN
+# - TALLY_SERVER_URL, TALLY_AUTH_HEADER
+# - RAZORPAYX_KEY_ID, RAZORPAYX_KEY_SECRET, RAZORPAYX_ACCOUNT_NUMBER
+# - N8N_DEFAULT_WEBHOOK_URL, N8N_WEBHOOK_SECRET
 # - RESEND_API_KEY, RESEND_FROM_EMAIL
 # - WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_APP_SECRET, WHATSAPP_VERIFY_TOKEN
-# - INBOUND_WEBHOOK_SECRET, WEBHOOK_DEFAULT_WORKSPACE_ID
+# - INBOUND_WEBHOOK_SECRET, CRON_SECRET, WEBHOOK_DEFAULT_WORKSPACE_ID
 #
 # Persistent File Storage — Cloudflare R2 Binding (10 GB free, ₹0 egress):
 # 1. Run `wrangler r2 bucket create kraya-vault`
@@ -24,3 +36,8 @@ REQUIRE_AUTH = "true"
 # [[r2_buckets]]
 # binding = "VAULT_BUCKET"
 # bucket_name = "kraya-vault"
+#
+# Optional Distributed Edge Rate-Limit KV (shared across Workers isolates):
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT_KV"
+# id = "<your-kv-namespace-id>"

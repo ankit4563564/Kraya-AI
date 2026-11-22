@@ -1,0 +1,75 @@
+# 1-Command Self-Hosted Production Stack: PostgreSQL 16 + Kraya API + Kraya Web PWA + n8n Automation Engine
+# Launch: docker compose up -d --build
+# Web App: http://localhost:8080 | API Health: http://localhost:8787/api/health | n8n UI: http://localhost:5678
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: kraya
+      POSTGRES_USER: kraya
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kraya_change_me_2026}
+    volumes:
+      - kraya_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kraya -d kraya"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kraya-api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      REQUIRE_AUTH: "true"
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      DATABASE_URL: ${DATABASE_URL:-postgres://kraya:${POSTGRES_PASSWORD:-kraya_change_me_2026}@postgres:5432/kraya}
+      LOCAL_VAULT_DIR: /data/uploads
+      N8N_DEFAULT_WEBHOOK_URL: ${N8N_DEFAULT_WEBHOOK_URL:-}
+    volumes:
+      - kraya_uploads:/data/uploads
+    ports:
+      - "8787:8787"
+
+  kraya-web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    depends_on:
+      - kraya-api
+    ports:
+      - "8080:80"
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      - kraya-api
+    environment:
+      GENERIC_TIMEZONE: Asia/Kolkata
+      TZ: Asia/Kolkata
+      N8N_SECURE_COOKIE: "false"
+      KRAYA_API_URL: http://kraya-api:8787
+      INBOUND_WEBHOOK_SECRET: ${INBOUND_WEBHOOK_SECRET:-replace-with-strong-webhook-secret}
+      CRON_SECRET: ${CRON_SECRET:-replace-with-strong-cron-secret}
+    volumes:
+      - kraya_n8n:/home/node/.n8n
+      - ./automations/n8n:/n8n-templates:ro
+    ports:
+      - "5678:5678"
+
+volumes:
+  kraya_pgdata:
+  kraya_uploads:
+  kraya_n8n:

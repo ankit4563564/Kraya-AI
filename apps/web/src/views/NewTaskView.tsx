@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import {
   Paperclip,
   Mic,
@@ -10,11 +10,6 @@ import {
   AlertTriangle,
   MessageCircle,
   ArrowRight,
-  ShoppingCart,
-  Inbox,
-  Wrench,
-  ClipboardCheck,
-  TrendingDown,
   FileText,
   X,
   ShieldCheck,
@@ -23,16 +18,31 @@ import {
   Zap,
   Pause,
   Play,
+  Bot,
+  FileCode2,
+  FileSpreadsheet,
+  RotateCcw,
 } from 'lucide-react';
 import {
+  API_BASE,
   apiJson,
-  ComplianceFlag,
   formatINR,
-  OutreachPackage,
   SummaryStats,
   UserRole,
 } from '../lib/api';
 import { OutreachModalRequest } from '../components/OutreachModal';
+import {
+  buildNextStepsForIngest,
+  CfoQaResponseData,
+  computeWorkspaceGuidance,
+  detectPromptIntent,
+  GlobalWorkflowTools,
+  GuidedNextStep,
+  IngestResponse,
+  NavTab,
+  WORKFLOW_STAGES,
+  WorkflowStageId,
+} from '../lib/workflow';
 
 interface LeakRow {
   id: string;
@@ -46,79 +56,29 @@ interface LeakRow {
   supplier: { id: string; name: string; phone: string | null; email: string | null } | null;
 }
 
-interface IngestResponse {
-  intake: { verbClass: string; pillar: string; requiresApprovalGate: boolean; detectedPromptInjection: boolean; rationale: string };
-  sourceEvent: { id: string; channel: string; parsedSummary: string; needsVerification: boolean; confidenceScore: number };
-  extracted: {
-    engine: string;
-    documentKind: string;
-    supplierName: string | null;
-    summary: string;
-    missingFields: string[];
-    needsVerification: boolean;
-    evidence: Array<{ field: string; value: unknown; confidence: number; evidenceQuote: string }>;
-  };
-  created: {
-    rfq?: { id: string; rfqNumber: string; title: string };
-    quote?: { id: string; netLandedUnitPaise: number; creditAdjustedUnitPaise: number };
-    landedCost?: { flags: ComplianceFlag[]; normalizationNote: string };
-    audit?: {
-      cfoVerdict: string;
-      imsSuggestedAction: string;
-      totalMoneyLeakPaise: number;
-      flags: ComplianceFlag[];
-    };
-    task?: { id: string; title: string; dueAt: string };
-  };
-  suggestedOutreach: OutreachPackage | null;
-  asrNote: string | null;
+interface SessionCard {
+  id: string;
+  userPrompt: string;
+  completedStep: 1 | 2 | 3 | 4 | 5;
+  badge: string;
+  title: string;
+  nextStepLabel: string;
+  tone: 'accent' | 'success' | 'warning' | 'danger';
+  ingest?: IngestResponse;
+  qa?: CfoQaResponseData;
+  showExports?: boolean;
+  nextSteps: GuidedNextStep[];
 }
 
 interface Props {
   summary: SummaryStats | null;
   userRole: UserRole;
   onDataMutated: () => void;
-  onNavigate: (tab: 'new_task' | 'inbox' | 'buying' | 'daily' | 'suppliers') => void;
+  onNavigate: (tab: NavTab) => void;
   onOpenOutreach: (req: OutreachModalRequest) => void;
+  tools: GlobalWorkflowTools;
+  prefillPrompt?: { text: string; channel?: string; stageId?: WorkflowStageId; nonce: number } | null;
 }
-
-const STARTER_TABS = [
-  {
-    id: 'buying',
-    label: 'Initial Buying',
-    icon: ShoppingCart,
-    channel: 'manual',
-    template: 'Send RFQ to 4 vendors for 5,000 5-ply corrugated boxes (HSN 4819), delivery within 10 days',
-  },
-  {
-    id: 'log',
-    label: 'Log Call / Chat / Email',
-    icon: Inbox,
-    channel: 'whatsapp',
-    template: 'From: Bharat Packaging. 5000 boxes @ 22 plus gst 5% extra transport 5k, 30 din udhari',
-  },
-  {
-    id: 'maint',
-    label: 'Maintenance & Reorder',
-    icon: Wrench,
-    channel: 'manual',
-    template: 'Track 125 kVA DG generator quarterly AMC & hydraulic oil spares due this month',
-  },
-  {
-    id: 'daily',
-    label: 'Daily Tasks',
-    icon: ClipboardCheck,
-    channel: 'pdf',
-    template: 'Audit Invoice #INV-412 from Shakti Packaging: 5000 boxes @ ₹26.50 + 5% GST, freight ₹5000 already incl of GST taxed at 18% again, Grand Total ₹145025',
-  },
-  {
-    id: 'negotiate',
-    label: 'Negotiate & Save',
-    icon: TrendingDown,
-    channel: 'phone',
-    template: 'Ramesh offered ₹24 flat cash on delivery for 5000 boxes, 5% GST incl, Monday dispatch',
-  },
-];
 
 const MANUAL_STEPS = [
   {
@@ -231,17 +191,28 @@ const RADAR_STATUS_MESSAGES = [
   'GTA Double-Freight Tax & Rate Creep Shield Running',
 ];
 
-export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOpenOutreach }: Props) {
+export function NewTaskView({
+  summary,
+  userRole,
+  onDataMutated,
+  onNavigate,
+  onOpenOutreach,
+  tools,
+  prefillPrompt,
+}: Props) {
+  const promptFieldId = useId();
   const isCaReadOnly = userRole === 'ca';
+  const guidance = computeWorkspaceGuidance(summary);
   const [prompt, setPrompt] = useState('');
   const [channel, setChannel] = useState('manual');
-  const [activeStarter, setActiveStarter] = useState<string | null>(null);
+  const [selectedStageId, setSelectedStageId] = useState<WorkflowStageId>(guidance.recommendedStage);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<IngestResponse | null>(null);
+  const [sessionCards, setSessionCards] = useState<SessionCard[]>([]);
+  const [qaHistory, setQaHistory] = useState<Array<{ role: 'user' | 'assistant'; text: string; topic?: string }>>([]);
   const [leaks, setLeaks] = useState<LeakRow[]>([]);
   const [openFaq, setOpenFaq] = useState<number | null>(0);
   const [activeFeatureTab, setActiveFeatureTab] = useState<'intake' | 'audit' | 'negotiate'>('intake');
@@ -251,9 +222,31 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
   const [radarMsgIdx, setRadarMsgIdx] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const processSectionRef = useRef<HTMLElement>(null);
+
+  const result = sessionCards[0] ?? null;
+  const activeStageDef =
+    WORKFLOW_STAGES.find((s) => s.id === selectedStageId) ?? WORKFLOW_STAGES[0];
+  const liveIntent =
+    prompt.trim() || attachedFiles.length > 0
+      ? detectPromptIntent(prompt, attachedFiles.length > 0)
+      : null;
+
+  useEffect(() => {
+    if (prefillPrompt?.text) {
+      setPrompt(prefillPrompt.text);
+      if (prefillPrompt.channel) setChannel(prefillPrompt.channel);
+      if (prefillPrompt.stageId) setSelectedStageId(prefillPrompt.stageId);
+      setTimeout(() => {
+        const el = document.querySelector('.studio-composer-container');
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        textareaRef.current?.focus();
+      }, 80);
+    }
+  }, [prefillPrompt]);
 
   // Subtle live status cycle in Hero Radar pill (respects reduced motion)
   useEffect(() => {
@@ -389,13 +382,275 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
     setRecording(false);
   };
 
-  const handleSubmit = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!prompt.trim() && attachedFiles.length === 0) return;
+  const executePrompt = async (overridePrompt?: string, overrideChannel?: string) => {
+    const rawPrompt = (overridePrompt ?? prompt).trim();
+    const effectiveChannel = overrideChannel ?? channel;
+    if (!rawPrompt && attachedFiles.length === 0) return;
+
     setSubmitting(true);
     setError(null);
     setBatchProgress(null);
+
+    const intent = detectPromptIntent(rawPrompt, attachedFiles.length > 0);
+    setSelectedStageId(intent.stageId);
+
     try {
+      // Smart Client-Side Routing for specialized engines (Live Sourcing, BOM, Negotiation, Sweep, GSTR-2B, Exports, Guide)
+      if (intent.kind === 'discover_suppliers') {
+        tools.onOpenDiscover(intent.extractedQuery || rawPrompt);
+        setSessionCards((prev) => [
+          {
+            id: `card-${Date.now()}`,
+            userPrompt: rawPrompt,
+            completedStep: 1,
+            badge: 'STEP 1 · LIVE AI SOURCING',
+            title: `Searching GST-verified suppliers for "${intent.extractedQuery || rawPrompt}"`,
+            nextStepLabel: 'Step 1 Sourcing Opened → Save top suppliers, then float your RFQ or log their quotes',
+            tone: 'accent',
+            nextSteps: [
+              {
+                id: 'src-next-rfq',
+                label: 'Create RFQ for Sourced Vendors',
+                hint: 'Float structured inquiry',
+                primary: true,
+                kind: 'prefill_prompt',
+                prompt: WORKFLOW_STAGES[0].defaultPrompt,
+                channel: 'manual',
+              },
+              {
+                id: 'src-next-quote',
+                label: 'Step 2: Paste First Vendor Quote →',
+                hint: 'Compute WACC landed cost',
+                kind: 'prefill_prompt',
+                prompt: WORKFLOW_STAGES[1].defaultPrompt,
+                channel: 'whatsapp',
+              },
+              {
+                id: 'src-next-dir',
+                label: 'Open My Suppliers',
+                hint: 'Review saved vendor book',
+                kind: 'navigate',
+                tab: 'suppliers',
+              },
+            ],
+          },
+          ...prev,
+        ]);
+        setPrompt('');
+        return;
+      }
+
+      if (intent.kind === 'bulk_bom') {
+        tools.onOpenBomImport(intent.extractedQuery || '');
+        setPrompt('');
+        return;
+      }
+
+      if (intent.kind === 'gstr2b_reconcile') {
+        tools.onOpenGstr2b();
+        setPrompt('');
+        return;
+      }
+
+      if (intent.kind === 'negotiate_rfq') {
+        const res = await tools.onOpenNegotiation();
+        setPrompt('');
+        if (!res.ok) {
+          setSessionCards((prev) => [
+            {
+              id: `card-${Date.now()}`,
+              userPrompt: rawPrompt,
+              completedStep: 2,
+              badge: 'STEP 2 → STEP 3 PREREQUISITE',
+              title: 'Log at least 2 supplier quotes on an RFQ to run AI BATNA Negotiation',
+              nextStepLabel:
+                res.message ||
+                'Kraya compares 2+ quotes on the same RFQ to compute spread, BATNA leverage, and counter-offer targets.',
+              tone: 'warning',
+              nextSteps: [
+                {
+                  id: 'neg-prefill-q',
+                  label: 'Log a 2nd Vendor Quote Now',
+                  hint: 'Paste WhatsApp or phone quote',
+                  primary: true,
+                  kind: 'prefill_prompt',
+                  prompt:
+                    'From: Shakti Packaging. 5000 boxes @ ₹24 flat cash on delivery, 5% GST incl, Monday dispatch',
+                  channel: 'whatsapp',
+                },
+                {
+                  id: 'neg-open-buying',
+                  label: 'Open Buying & RFQs',
+                  hint: 'View existing RFQs & quotes',
+                  kind: 'navigate',
+                  tab: 'buying',
+                },
+              ],
+            },
+            ...prev,
+          ]);
+        }
+        return;
+      }
+
+      if (intent.kind === 'autonomous_sweep') {
+        if (isCaReadOnly) {
+          setError('CA / Auditor role is read-only. Ask an Owner or Purchase Clerk to run the Autonomous Expeditor Sweep.');
+          return;
+        }
+        const res = await apiJson<{
+          createdTasksCount: number;
+          summary: {
+            staleRfqsFound: number;
+            overdueDeliveriesFound: number;
+            msmeCliffsFound: number;
+            rule37CliffsFound: number;
+            amcsDueFound: number;
+            incompleteKycSuppliers: number;
+          };
+        }>('/api/automation/run-sweep', { method: 'POST' });
+        onDataMutated();
+        setPrompt('');
+        setSessionCards((prev) => [
+          {
+            id: `card-${Date.now()}`,
+            userPrompt: rawPrompt,
+            completedStep: 4,
+            badge: 'STEP 4 · AUTONOMOUS SWEEP',
+            title: `Expeditor Sweep Complete — ${res.createdTasksCount} new action item${res.createdTasksCount === 1 ? '' : 's'} queued`,
+            nextStepLabel: `Found ${res.summary.staleRfqsFound} stale RFQs · ${res.summary.overdueDeliveriesFound} overdue POs · ${res.summary.msmeCliffsFound} MSME 43B(h) payment cliffs · ${res.summary.amcsDueFound} due AMCs · ${res.summary.incompleteKycSuppliers} incomplete KYC vendors.`,
+            tone: 'success',
+            nextSteps: [
+              {
+                id: 'sw-open-daily',
+                label: 'Open Daily Follow-Up Queue',
+                hint: 'Send 1-click WhatsApp nudges',
+                primary: true,
+                kind: 'navigate',
+                tab: 'daily',
+              },
+              {
+                id: 'sw-step5-audit',
+                label: 'Step 5: Audit a Supplier Invoice →',
+                hint: 'Check bills against POs',
+                kind: 'prefill_prompt',
+                prompt: WORKFLOW_STAGES[4].defaultPrompt,
+                channel: 'pdf',
+              },
+            ],
+          },
+          ...prev,
+        ]);
+        return;
+      }
+
+      if (intent.kind === 'export_accounting') {
+        setPrompt('');
+        setSessionCards((prev) => [
+          {
+            id: `card-${Date.now()}`,
+            userPrompt: rawPrompt,
+            completedStep: 5,
+            badge: 'STEP 5 · ERP & CA EXPORTS',
+            title: 'Accounting Vouchers & CA GST IMS Audit Pack Ready',
+            nextStepLabel: 'Export verified purchase vouchers directly to Tally Prime, Zoho Books, or your Chartered Accountant.',
+            tone: 'success',
+            showExports: true,
+            nextSteps: [
+              {
+                id: 'exp-check-2b',
+                label: 'Reconcile GSTR-2B / IMS First',
+                hint: 'Confirm 100% portal ITC match',
+                kind: 'gstr2b',
+              },
+              {
+                id: 'exp-open-daily',
+                label: 'Open Full Audit Register',
+                hint: 'View all audited bills & CFO intelligence',
+                kind: 'navigate',
+                tab: 'daily',
+              },
+            ],
+          },
+          ...prev,
+        ]);
+        return;
+      }
+
+      if (intent.kind === 'guide_me') {
+        const g = computeWorkspaceGuidance(summary);
+        setPrompt('');
+        setSessionCards((prev) => [
+          {
+            id: `card-${Date.now()}`,
+            userPrompt: rawPrompt,
+            completedStep: WORKFLOW_STAGES.find((s) => s.id === g.recommendedStage)?.stepNumber ?? 1,
+            badge: 'GUIDED WORKFLOW BRIEFING',
+            title: g.headline,
+            nextStepLabel: g.subtext,
+            tone: 'accent',
+            nextSteps: [
+              {
+                id: 'guide-run',
+                label: g.ctaLabel,
+                hint: 'Pre-fill recommended prompt',
+                primary: true,
+                kind: 'prefill_prompt',
+                prompt: g.ctaPrompt,
+              },
+              {
+                id: 'guide-nav',
+                label: 'Jump to Recommended Section',
+                hint: 'Open workspace tab',
+                kind: 'navigate',
+                tab: g.ctaTab,
+              },
+            ],
+          },
+          ...prev,
+        ]);
+        return;
+      }
+
+      if (intent.kind === 'ask_cfo') {
+        const res = await apiJson<{ runId: string; qa: CfoQaResponseData }>('/api/agents/ask', {
+          method: 'POST',
+          body: JSON.stringify({
+            question: rawPrompt,
+            conversationHistory: qaHistory.slice(-6),
+          }),
+        });
+        setQaHistory((prev) => [
+          ...prev,
+          { role: 'user', text: rawPrompt, topic: res.qa.topic },
+          { role: 'assistant', text: res.qa.directAnswer, topic: res.qa.topic },
+        ]);
+        setPrompt('');
+        setSessionCards((prev) => [
+          {
+            id: `card-${Date.now()}`,
+            userPrompt: rawPrompt,
+            completedStep: 3,
+            badge: res.qa.isCrossQuestion
+              ? `CROSS-QUESTION · ${res.qa.topic.replace(/_/g, ' ').toUpperCase()}`
+              : `CFO Q&A · ${res.qa.topic.replace(/_/g, ' ').toUpperCase()}`,
+            title: res.qa.headline,
+            nextStepLabel: res.qa.directAnswer,
+            tone: 'accent',
+            qa: res.qa,
+            nextSteps: [],
+          },
+          ...prev,
+        ]);
+        return;
+      }
+
+      if (isCaReadOnly) {
+        setError('CA / Auditor role is read-only. You can still run "Reconcile GSTR-2B", "Export Tally XML", or "What should I do next?".');
+        return;
+      }
+
+      // Standard multimodal / text prompt ingestion
       let lastData: IngestResponse | null = null;
       if (attachedFiles.length > 0) {
         for (let i = 0; i < attachedFiles.length; i++) {
@@ -406,8 +661,8 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
               : `Auditing ${f.name}...`
           );
           const fd = new FormData();
-          fd.append('prompt', prompt);
-          fd.append('channel', channel);
+          fd.append('prompt', rawPrompt);
+          fd.append('channel', effectiveChannel);
           fd.append('file', f);
           lastData = await apiJson<IngestResponse>('/api/prompt/ingest', {
             method: 'POST',
@@ -417,13 +672,37 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
       } else {
         lastData = await apiJson<IngestResponse>('/api/prompt/ingest', {
           method: 'POST',
-          body: JSON.stringify({ prompt, channel }),
+          body: JSON.stringify({ prompt: rawPrompt, channel: effectiveChannel }),
         });
       }
-      if (lastData) setResult(lastData);
+
+      if (lastData) {
+        const nextInfo = buildNextStepsForIngest(lastData);
+        const nextStageMap: Record<number, WorkflowStageId> = {
+          1: 'collect_quotes',
+          2: 'negotiate_po',
+          3: 'receive_track',
+          4: 'audit_settle',
+          5: 'audit_settle',
+        };
+        setSelectedStageId(nextStageMap[nextInfo.completedStep] || 'source_rfq');
+        setSessionCards((prev) => [
+          {
+            id: `card-${Date.now()}`,
+            userPrompt: rawPrompt || attachedFiles.map((f) => f.name).join(', '),
+            completedStep: nextInfo.completedStep,
+            badge: `STEP ${nextInfo.completedStep} COMPLETE`,
+            title: lastData.sourceEvent.parsedSummary,
+            nextStepLabel: nextInfo.nextStepLabel,
+            tone: lastData.created.audit?.totalMoneyLeakPaise ? 'danger' : 'success',
+            ingest: lastData,
+            nextSteps: nextInfo.steps,
+          },
+          ...prev,
+        ]);
+      }
       setPrompt('');
       setAttachedFiles([]);
-      setActiveStarter(null);
       loadLeaks();
       onDataMutated();
     } catch (err) {
@@ -431,6 +710,45 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
     } finally {
       setSubmitting(false);
       setBatchProgress(null);
+    }
+  };
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    await executePrompt();
+  };
+
+  const handleGuidedNextStep = async (step: GuidedNextStep) => {
+    if (step.kind === 'navigate' && step.tab) {
+      onNavigate(step.tab);
+      return;
+    }
+    if (step.kind === 'discover') {
+      tools.onOpenDiscover(step.query || '');
+      return;
+    }
+    if (step.kind === 'gstr2b') {
+      tools.onOpenGstr2b();
+      return;
+    }
+    if (step.kind === 'negotiate') {
+      await executePrompt('Negotiate my open RFQ with AI BATNA strategy', 'manual');
+      return;
+    }
+    if (step.kind === 'sweep') {
+      await executePrompt('Run autonomous expeditor sweep for overdue deliveries and 43B(h) deadlines', 'manual');
+      return;
+    }
+    if (step.kind === 'outreach' && step.outreach) {
+      onOpenOutreach(step.outreach);
+      return;
+    }
+    if (step.kind === 'prefill_prompt' && step.prompt) {
+      setPrompt(step.prompt);
+      if (step.channel) setChannel(step.channel);
+      const nextIntent = detectPromptIntent(step.prompt, false);
+      setSelectedStageId(nextIntent.stageId);
+      focusPromptInput();
     }
   };
 
@@ -445,13 +763,20 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
 
   const handleVerifyEvent = async (eventId: string) => {
     await apiJson(`/api/inbox/${eventId}/verify`, { method: 'PATCH' });
-    if (result?.sourceEvent.id === eventId) {
-      setResult({
-        ...result,
-        sourceEvent: { ...result.sourceEvent, needsVerification: false },
-        extracted: { ...result.extracted, needsVerification: false },
-      });
-    }
+    setSessionCards((prev) =>
+      prev.map((card) =>
+        card.ingest?.sourceEvent.id === eventId
+          ? {
+              ...card,
+              ingest: {
+                ...card.ingest,
+                sourceEvent: { ...card.ingest.sourceEvent, needsVerification: false },
+                extracted: { ...card.ingest.extracted, needsVerification: false },
+              },
+            }
+          : card
+      )
+    );
     onDataMutated();
   };
 
@@ -459,8 +784,8 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
     const el = document.querySelector('.studio-composer-container');
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setTimeout(() => {
-      (document.querySelector('.prompt-textarea') as HTMLTextAreaElement | null)?.focus();
-    }, 320);
+      textareaRef.current?.focus();
+    }, 260);
   };
 
   // Derived scroll-driven values for Process Comparison
@@ -546,27 +871,90 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
         {isCaReadOnly && (
           <div className="alert-banner" style={{ background: 'var(--warning-soft)', color: 'var(--warning)', marginBottom: 16 }}>
             <span>
-              You are signed in with the <strong>CA / Auditor (Read-Only)</strong> role. You can inspect all quotes, invoices, Money Leaks, and export Tally XML &amp; CA GST IMS Packs, but creating or modifying procurement records is disabled.
+              You are signed in with the <strong>CA / Auditor (Read-Only)</strong> role. You can inspect all quotes, invoices, Money Leaks, run GSTR-2B reconciliation, and export Tally XML &amp; CA GST IMS Packs, while creating or modifying records is disabled.
             </span>
           </div>
         )}
 
+        {/* Guided 5-Step Flow Bar directly above the prompt box so users always know the order */}
+        <div className="guided-studio-header">
+          <div className="guided-studio-title-row">
+            <span className="pill pill-accent" style={{ fontSize: 11 }}>
+              <Sparkles size={11} aria-hidden="true" /> 5-Step Guided Procurement Prompt
+            </span>
+            <span className="guided-studio-next-cue">
+              {guidance.headline}
+            </span>
+          </div>
+
+          <ol className="studio-step-pills" aria-label="Choose a procurement workflow step">
+            {WORKFLOW_STAGES.map((stage) => {
+              const isSelected = selectedStageId === stage.id;
+              const isRec = guidance.recommendedStage === stage.id;
+              const status = guidance.stageStatus[stage.id];
+              return (
+                <li key={stage.id}>
+                  <button
+                    type="button"
+                    className={`studio-step-pill ${isSelected ? 'is-selected' : ''} ${isRec ? 'is-recommended' : ''}`}
+                    aria-current={isSelected ? 'step' : undefined}
+                    onClick={() => {
+                      setSelectedStageId(stage.id);
+                      setChannel(stage.channel);
+                    }}
+                  >
+                    <span className="studio-step-dot" aria-hidden="true">
+                      {status === 'completed' ? <Check size={10} strokeWidth={3} /> : stage.stepNumber}
+                    </span>
+                    <span>{stage.shortTitle}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+
+          <div className="studio-stage-explainer">
+            <div>
+              <strong>{activeStageDef.title}:</strong> {activeStageDef.oneLiner}
+            </div>
+            <span className="studio-stage-next-arrow">{activeStageDef.nextStageHint}</span>
+          </div>
+        </div>
+
         <form className="prompt-card" onSubmit={handleSubmit}>
+          <label htmlFor={promptFieldId} className="visually-hidden">
+            Tell Kraya what procurement step to run next
+          </label>
           <textarea
-            className="prompt-textarea"
-            disabled={isCaReadOnly}
+            ref={textareaRef}
+            id={promptFieldId}
+            className="prompt-textarea prompt-textarea-autogrow"
             placeholder={
               isCaReadOnly
-                ? 'Read-only CA mode: switch to Unified Inbox, Buying & RFQs, or Maintenance & Daily to review records and export CA Audit Packs.'
-                : "Type in English/Hinglish, paste a WhatsApp vendor reply ('22 plus gst extra transport 5k, 30 din udhari'), or drop an invoice PDF / handwritten parchi..."
+                ? 'CA Read-Only mode: try "Reconcile GSTR-2B", "Export Tally XML", or "What should I do next?"'
+                : `${activeStageDef.oneLiner} (Press Enter to run, Shift+Enter for new line)`
             }
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return;
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') handleSubmit();
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+                handleSubmit();
+              } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                handleSubmit();
+              }
             }}
           />
+
+          {liveIntent && (
+            <div className="live-intent-banner" aria-live="polite">
+              <Bot size={14} aria-hidden="true" />
+              <strong>{liveIntent.actionLabel}</strong>
+              <span>— {liveIntent.detail}</span>
+            </div>
+          )}
 
           {attachedFiles.length > 0 && (
             <div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 6 }}>
@@ -637,7 +1025,7 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={isCaReadOnly || submitting || (!prompt.trim() && attachedFiles.length === 0)}
+              disabled={submitting || (!prompt.trim() && attachedFiles.length === 0)}
             >
               <Send size={14} />
               {submitting ? batchProgress || 'Auditing & Routing...' : 'Run Procurement Agent'}
@@ -645,166 +1033,343 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
           </div>
         </form>
 
-        <div className="starter-tabs" role="group" aria-label="One-click starter workflows" style={{ marginTop: 14 }}>
-          {STARTER_TABS.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                disabled={isCaReadOnly}
-                className={`starter-tab ${activeStarter === tab.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveStarter(tab.id);
-                  setPrompt(tab.template);
-                  setChannel(tab.channel);
-                }}
-              >
-                <Icon size={13} />
-                {tab.label}
-              </button>
-            );
-          })}
+        {/* Contextual 1-Click Examples for the Selected Step + "What should I do next?" */}
+        <div className="starter-tabs" role="group" aria-label={`Guided prompts for ${activeStageDef.shortTitle}`} style={{ marginTop: 14 }}>
+          {activeStageDef.examples.map((ex) => (
+            <button
+              key={ex.id}
+              type="button"
+              className={`starter-tab ${prompt === ex.prompt ? 'active' : ''}`}
+              onClick={() => {
+                setPrompt(ex.prompt);
+                setChannel(ex.channel);
+                textareaRef.current?.focus();
+              }}
+            >
+              <Sparkles size={12} aria-hidden="true" />
+              <span>{ex.label}</span>
+              {ex.badge && <span className="starter-mini-badge">{ex.badge}</span>}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="starter-tab"
+            onClick={() =>
+              executePrompt(
+                'Why is Bharat Packaging ranked #1 even though they charge ₹5,000 extra for transport?',
+                'manual'
+              )
+            }
+          >
+            <Bot size={12} aria-hidden="true" />
+            <span>Ask CFO / Cross-Question</span>
+            <span className="starter-mini-badge">PnC Q&amp;A</span>
+          </button>
+          <button
+            type="button"
+            className="starter-tab"
+            onClick={() => executePrompt('What should I do next?', 'manual')}
+          >
+            <Bot size={12} aria-hidden="true" />
+            <span>What should I do next?</span>
+          </button>
         </div>
       </div>
 
       {error && (
-        <div className="card" style={{ borderColor: 'var(--danger)', background: 'var(--danger-soft)', color: 'var(--danger)', maxWidth: 1040, margin: '0 auto 24px' }}>
+        <div className="card" role="alert" style={{ borderColor: 'var(--danger)', background: 'var(--danger-soft)', color: 'var(--danger)', maxWidth: 1040, margin: '0 auto 24px' }}>
           {error}
         </div>
       )}
 
-      {/* Structured Result Card (Zero Hallucination + Amber Verification Chips + 1-Click Action) */}
-      {result && (
-        <div className="card stack" style={{ maxWidth: 1040, margin: '0 auto 48px' }}>
-          <div className="card-header" style={{ marginBottom: 0 }}>
-            <div>
-              <div className="row" style={{ marginBottom: 6 }}>
-                <span className="pill pill-accent">
-                  <Sparkles size={12} />
-                  {result.intake.pillar.replace('_', ' ').toUpperCase()}
-                </span>
-                <span className="pill">
-                  Verb: {result.intake.verbClass}
-                </span>
-                <span className="pill">
-                  Engine: {result.extracted.engine === 'gemini_live' ? 'Gemini Flash Vision' : 'Deterministic Hinglish Parser'}
-                </span>
-                {result.intake.detectedPromptInjection && (
-                  <span className="pill pill-critical">
-                    <ShieldAlert size={12} /> Prompt Injection Fenced as Data
-                  </span>
-                )}
-              </div>
-              <h2 className="card-title">{result.sourceEvent.parsedSummary}</h2>
-            </div>
-
-            {result.sourceEvent.needsVerification ? (
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={{ background: 'var(--warning-soft)', color: 'var(--warning)', borderColor: 'var(--warning)' }}
-                onClick={() => handleVerifyEvent(result.sourceEvent.id)}
-              >
-                <AlertTriangle size={13} />
-                1-Click Confirm Extracted Figures
-              </button>
-            ) : (
-              <span className="pill pill-success">
-                <CheckCircle2 size={12} /> Verified ({Math.round(result.sourceEvent.confidenceScore * 100)}%)
+      {/* Guided Session Feed: Structured Results + Sequential Next-Step Prompts */}
+      {sessionCards.length > 0 && (
+        <div className="stack" style={{ maxWidth: 1040, margin: '0 auto 48px', gap: 18 }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="row" style={{ gap: 8 }}>
+              <span className="pill pill-accent">Active Guided Session ({sessionCards.length})</span>
+              <span style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                Follow the &ldquo;Up Next&rdquo; buttons below or type your next instruction above.
               </span>
-            )}
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setSessionCards([])}
+            >
+              <RotateCcw size={13} aria-hidden="true" /> Back to Full Overview
+            </button>
           </div>
 
-          {result.asrNote && (
-            <div style={{ fontSize: 12.5, color: 'var(--warning)' }}>{result.asrNote}</div>
-          )}
+          {sessionCards.map((card) => {
+            const ingest = card.ingest;
+            return (
+              <div key={card.id} className="card stack guided-result-card">
+                <div className="guided-prompt-echo">
+                  <span className="pill" style={{ fontSize: 11 }}>You asked</span>
+                  <span style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{card.userPrompt}</span>
+                </div>
 
-          {result.extracted.missingFields.length > 0 && (
-            <div className="row">
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Not stated (left blank, never guessed):</span>
-              {result.extracted.missingFields.map((f) => (
-                <span key={f} className="pill pill-warning">Missing: {f}</span>
-              ))}
-            </div>
-          )}
-
-          {result.extracted.evidence.length > 0 && (
-            <div className="row">
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Evidence:</span>
-              {result.extracted.evidence.map((ev, idx) => (
-                <span key={idx} className="pill mono" style={{ fontSize: 11 }}>
-                  {ev.field}: &ldquo;{ev.evidenceQuote}&rdquo;
-                </span>
-              ))}
-            </div>
-          )}
-
-          {result.created.audit && (
-            <div
-              className="card"
-              style={{
-                padding: 12,
-                background: result.created.audit.totalMoneyLeakPaise > 0 ? 'var(--danger-soft)' : 'var(--success-soft)',
-                borderColor: result.created.audit.totalMoneyLeakPaise > 0 ? 'var(--danger)' : 'var(--success)',
-              }}
-            >
-              <strong>{result.created.audit.cfoVerdict}</strong>
-              <div className="stack" style={{ marginTop: 8, gap: 6 }}>
-                {result.created.audit.flags.map((f, i) => (
-                  <div key={i} style={{ fontSize: 12.5 }}>
-                    <span className={`pill ${f.severity === 'critical' ? 'pill-critical' : f.severity === 'warning' ? 'pill-warning' : ''}`}>
-                      {f.statutoryRef}
-                    </span>{' '}
-                    <strong>{f.title}</strong> — {f.detail}
+                <div className="card-header" style={{ marginBottom: 0 }}>
+                  <div>
+                    <div className="row" style={{ marginBottom: 6 }}>
+                      <span className={`pill ${card.tone === 'danger' ? 'pill-critical' : card.tone === 'warning' ? 'pill-warning' : card.tone === 'success' ? 'pill-success' : 'pill-accent'}`}>
+                        <Sparkles size={12} />
+                        {card.badge}
+                      </span>
+                      {ingest && (
+                        <>
+                          <span className="pill">
+                            {ingest.intake.pillar.replace('_', ' ').toUpperCase()}
+                          </span>
+                          <span className="pill">
+                            Engine: {ingest.extracted.engine === 'gemini_live' ? 'Gemini Flash Vision' : 'Deterministic Hinglish Parser'}
+                          </span>
+                          {ingest.intake.detectedPromptInjection && (
+                            <span className="pill pill-critical">
+                              <ShieldAlert size={12} /> Prompt Injection Fenced as Data
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    <h2 className="card-title">{card.title}</h2>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
 
-          {result.created.quote && (
-            <div className="row" style={{ justifyContent: 'space-between', padding: '8px 12px', borderRadius: 8, background: 'var(--bg-subtle)' }}>
-              <div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{result.created.landedCost?.normalizationNote}</div>
-                <div className="mono" style={{ fontWeight: 600 }}>
-                  Net Landed: {formatINR(result.created.quote.netLandedUnitPaise)} &bull; Credit-Adjusted Real Cost:{' '}
-                  <span style={{ color: 'var(--accent)' }}>{formatINR(result.created.quote.creditAdjustedUnitPaise)}</span>
+                  {ingest &&
+                    (ingest.sourceEvent.needsVerification ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{ background: 'var(--warning-soft)', color: 'var(--warning)', borderColor: 'var(--warning)' }}
+                        onClick={() => handleVerifyEvent(ingest.sourceEvent.id)}
+                      >
+                        <AlertTriangle size={13} />
+                        1-Click Confirm Extracted Figures
+                      </button>
+                    ) : (
+                      <span className="pill pill-success">
+                        <CheckCircle2 size={12} /> Verified ({Math.round(ingest.sourceEvent.confidenceScore * 100)}%)
+                      </span>
+                    ))}
+                </div>
+
+                {ingest?.asrNote && (
+                  <div style={{ fontSize: 12.5, color: 'var(--warning)' }}>{ingest.asrNote}</div>
+                )}
+
+                {ingest?.created.pendingVerificationReason && (
+                  <div className="alert-banner" style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}>
+                    {ingest.created.pendingVerificationReason}
+                  </div>
+                )}
+
+                {ingest && ingest.extracted.missingFields.length > 0 && (
+                  <div className="row">
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Not stated (left blank, never guessed):</span>
+                    {ingest.extracted.missingFields.map((f) => (
+                      <span key={f} className="pill pill-warning">Missing: {f}</span>
+                    ))}
+                  </div>
+                )}
+
+                {ingest && ingest.extracted.evidence.length > 0 && (
+                  <div className="row">
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Evidence:</span>
+                    {ingest.extracted.evidence.map((ev, idx) => (
+                      <span key={idx} className="pill mono" style={{ fontSize: 11 }}>
+                        {ev.field}: &ldquo;{ev.evidenceQuote}&rdquo;
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {ingest?.created.audit && (
+                  <div
+                    className="card"
+                    style={{
+                      padding: 12,
+                      background: ingest.created.audit.totalMoneyLeakPaise > 0 ? 'var(--danger-soft)' : 'var(--success-soft)',
+                      borderColor: ingest.created.audit.totalMoneyLeakPaise > 0 ? 'var(--danger)' : 'var(--success)',
+                    }}
+                  >
+                    <strong>{ingest.created.audit.cfoVerdict}</strong>
+                    <div className="stack" style={{ marginTop: 8, gap: 6 }}>
+                      {ingest.created.audit.flags.map((f, i) => (
+                        <div key={i} style={{ fontSize: 12.5 }}>
+                          <span className={`pill ${f.severity === 'critical' ? 'pill-critical' : f.severity === 'warning' ? 'pill-warning' : ''}`}>
+                            {f.statutoryRef}
+                          </span>{' '}
+                          <strong>{f.title}</strong> — {f.detail}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {ingest?.created.quote && (
+                  <div className="row" style={{ justifyContent: 'space-between', padding: '10px 14px', borderRadius: 10, background: 'var(--bg-subtle)' }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{ingest.created.landedCost?.normalizationNote}</div>
+                      <div className="mono" style={{ fontWeight: 600 }}>
+                        Net Landed: {formatINR(ingest.created.quote.netLandedUnitPaise)} &bull; Credit-Adjusted Real Cost:{' '}
+                        <span style={{ color: 'var(--accent)' }}>{formatINR(ingest.created.quote.creditAdjustedUnitPaise)}</span>
+                      </div>
+                    </div>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={() => onNavigate('buying')}>
+                      Open Landed Cost Comparison <ArrowRight size={13} />
+                    </button>
+                  </div>
+                )}
+
+                {card.showExports && (
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <a href={`${API_BASE}/api/exports/tally.xml`} className="btn btn-primary btn-sm" target="_blank" rel="noreferrer">
+                      <FileCode2 size={13} /> Download Tally Prime XML
+                    </a>
+                    <a href={`${API_BASE}/api/exports/zoho-books.csv`} className="btn btn-sm" target="_blank" rel="noreferrer">
+                      <FileSpreadsheet size={13} /> Download Zoho Books CSV
+                    </a>
+                    <a href={`${API_BASE}/api/exports/ca-audit-pack.xlsx`} className="btn btn-sm" target="_blank" rel="noreferrer">
+                      <FileSpreadsheet size={13} /> Download CA GST IMS Pack (.xlsx)
+                    </a>
+                  </div>
+                )}
+
+                {card.qa && (
+                  <div className="stack" style={{ gap: 12 }}>
+                    <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.55, color: 'var(--text-primary)' }}>
+                      {card.qa.directAnswer}
+                    </p>
+
+                    {card.qa.mathProof.length > 0 && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 8 }}>
+                        {card.qa.mathProof.map((m, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: 10,
+                              background: m.highlight ? 'var(--accent-soft)' : 'var(--bg-subtle)',
+                              border: m.highlight ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+                              fontSize: 12.5,
+                            }}
+                          >
+                            <div style={{ fontWeight: 600 }}>{m.label}</div>
+                            <div className="mono" style={{ fontWeight: 700, color: 'var(--accent)', fontSize: 13.5, marginTop: 3 }}>
+                              {m.value}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 3 }}>
+                              {m.formula}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {card.qa.pncMatrix.length > 0 && (
+                      <div className="card" style={{ padding: 12, background: 'var(--bg-subtle)' }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+                          Permutations &amp; Combinations (PnC) Logical Matrix
+                        </div>
+                        <div className="stack" style={{ gap: 6 }}>
+                          {card.qa.pncMatrix.map((row, idx) => (
+                            <div
+                              key={idx}
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                padding: '6px 8px',
+                                borderRadius: 6,
+                                background: 'var(--bg-surface)',
+                                fontSize: 12,
+                              }}
+                            >
+                              <div>
+                                <strong>{row.condition}</strong> → {row.outcome}
+                              </div>
+                              <span className="pill mono" style={{ fontSize: 10.5 }}>
+                                {row.impact}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {card.qa.statutoryCitations.length > 0 && (
+                      <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                        {card.qa.statutoryCitations.map((c, idx) => (
+                          <span key={idx} className="pill" title={c.ruleSummary} style={{ fontSize: 11 }}>
+                            <ShieldCheck size={11} /> {c.act} · {c.section}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {card.qa.suggestedCrossQuestions.length > 0 && (
+                      <div className="card" style={{ padding: 12, borderColor: 'var(--accent)' }}>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+                          Follow-Up Cross-Questions (Click to Challenge or Drill Down)
+                        </div>
+                        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+                          {card.qa.suggestedCrossQuestions.map((cq, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              className={`btn btn-sm ${idx === 0 ? 'btn-primary' : ''}`}
+                              onClick={() => executePrompt(cq, 'manual')}
+                            >
+                              <span>{cq}</span>
+                              <ArrowRight size={12} aria-hidden="true" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Crystal-Clear "Up Next" Guided Step Tray */}
+                <div className="guided-next-tray">
+                  <div className="guided-next-tray-header">
+                    <span className="pill pill-accent" style={{ fontSize: 11 }}>
+                      Step {card.completedStep} of 5
+                    </span>
+                    <strong>{card.nextStepLabel}</strong>
+                  </div>
+                  <div className="guided-next-actions">
+                    {card.nextSteps.map((step) => (
+                      <button
+                        key={step.id}
+                        type="button"
+                        className={`guided-next-btn ${step.primary ? 'is-primary' : ''}`}
+                        onClick={() => handleGuidedNextStep(step)}
+                      >
+                        <span className="guided-next-btn-top">
+                          {step.kind === 'outreach' && <MessageCircle size={13} aria-hidden="true" />}
+                          <span>{step.label}</span>
+                          <ArrowRight size={13} aria-hidden="true" />
+                        </span>
+                        <span className="guided-next-btn-hint">{step.hint}</span>
+                      </button>
+                    ))}
+                    {ingest && (
+                      <button type="button" className="guided-next-btn" onClick={() => onNavigate('inbox')}>
+                        <span className="guided-next-btn-top">
+                          <span>Inspect in Unified Inbox</span>
+                          <ArrowRight size={13} aria-hidden="true" />
+                        </span>
+                        <span className="guided-next-btn-hint">View permanent audit trail</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => onNavigate('buying')}>
-                Open Landed Cost Comparison <ArrowRight size={13} />
-              </button>
-            </div>
-          )}
-
-          <div className="row">
-            {result.suggestedOutreach && (
-              <button
-                type="button"
-                className="btn btn-whatsapp btn-sm"
-                onClick={() =>
-                  onOpenOutreach({
-                    scenario: result.created.audit ? 'invoice_dispute' : result.created.rfq ? 'rfq_request' : 'counter_offer',
-                    supplierName: result.extracted.supplierName || 'Vendor',
-                    disputeAmountPaise: result.created.audit?.totalMoneyLeakPaise,
-                    disputeReasons: result.created.audit?.flags.filter((f) => f.severity !== 'info').map((f) => f.title),
-                  })
-                }
-              >
-                <MessageCircle size={13} />
-                1-Click WhatsApp / Email Outreach
-              </button>
-            )}
-            <button type="button" className="btn btn-sm" onClick={() => onNavigate('inbox')}>
-              View in Unified Inbox
-            </button>
-            {result.created.rfq && (
-              <button type="button" className="btn btn-sm" onClick={() => onNavigate('buying')}>
-                Open {result.created.rfq.rfqNumber}
-              </button>
-            )}
-          </div>
+            );
+          })}
         </div>
       )}
 

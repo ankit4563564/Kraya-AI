@@ -1,0 +1,281 @@
+{
+  "name": "Kraya 07 — D&B Supplier Risk Watch, SAP Ariba Catalog Filter & Dynamic Sourcing PnC",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-risk",
+      "name": "Receive D&B / Regional Risk Feed Signal",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-risk-sourcing-07",
+      "position": [
+        180,
+        300
+      ],
+      "parameters": {
+        "path": "kraya-risk-sourcing",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-risk",
+      "name": "Normalize Risk Feed & Catalog Filter Criteria",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    ...body,\n    operation: 'risk_sourcing_pnc'\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-exec-risk",
+      "name": "Assess Risk, Query Approved Catalog & Draft Proposal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        690,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "kraya-risk-switch",
+      "name": "Route by Supplier Risk Severity PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        950,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "critical_disruption_dual_source_70_30",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-critical_disruption_dual_source_70_30",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "critical_disruption_dual_source_70_30",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "elevated_risk_backup_rfq_standby",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-elevated_risk_backup_rfq_standby",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "elevated_risk_backup_rfq_standby",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-risk-crit",
+      "name": "Activate 70/30 Dual-Sourcing Proposal & Fallback RFQ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, sourcingAction: 'IMMEDIATE_70_30_DUAL_SOURCE_FALLBACK_ACTIVATED' } }];"
+      }
+    },
+    {
+      "id": "kraya-risk-elev",
+      "name": "Place Approved L1/L2 Backup Vendors on Standby",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, sourcingAction: 'BACKUP_SUPPLIERS_SHORTLISTED_ON_WATCH' } }];"
+      }
+    },
+    {
+      "id": "kraya-risk-ok",
+      "name": "Log Healthy Supplier D&B & ESG Telemetry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, sourcingAction: 'NO_FALLBACK_NEEDED_SUPPLIER_HEALTHY' } }];"
+      }
+    },
+    {
+      "id": "kraya-risk-respond",
+      "name": "Return Risk Watch & Sourcing Proposal",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1510,
+        300
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive D&B / Regional Risk Feed Signal": {
+      "main": [
+        [
+          {
+            "node": "Normalize Risk Feed & Catalog Filter Criteria",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Risk Feed & Catalog Filter Criteria": {
+      "main": [
+        [
+          {
+            "node": "Assess Risk, Query Approved Catalog & Draft Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assess Risk, Query Approved Catalog & Draft Proposal": {
+      "main": [
+        [
+          {
+            "node": "Route by Supplier Risk Severity PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Supplier Risk Severity PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Activate 70/30 Dual-Sourcing Proposal & Fallback RFQ",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Place Approved L1/L2 Backup Vendors on Standby",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Healthy Supplier D&B & ESG Telemetry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activate 70/30 Dual-Sourcing Proposal & Fallback RFQ": {
+      "main": [
+        [
+          {
+            "node": "Return Risk Watch & Sourcing Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Place Approved L1/L2 Backup Vendors on Standby": {
+      "main": [
+        [
+          {
+            "node": "Return Risk Watch & Sourcing Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Healthy Supplier D&B & ESG Telemetry": {
+      "main": [
+        [
+          {
+            "node": "Return Risk Watch & Sourcing Proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

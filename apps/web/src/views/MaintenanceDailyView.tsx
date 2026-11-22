@@ -14,9 +14,11 @@ import {
   Bot,
 } from 'lucide-react';
 import { API_BASE, apiJson, ComplianceFlag, formatINR, SupplierRecord, UserRole } from '../lib/api';
+import { NavTab } from '../lib/workflow';
 import { ModalDialog } from '../components/ModalDialog';
 import { OutreachModalRequest } from '../components/OutreachModal';
 import { Gstr2bReconcilerModal } from '../components/Gstr2bReconcilerModal';
+import { NextStepBanner } from '../components/WorkflowJourneyRail';
 
 interface CfoIntelligence {
   totals: {
@@ -103,9 +105,11 @@ interface Props {
   userRole: UserRole;
   onDataMutated: () => void;
   onOpenOutreach: (req: OutreachModalRequest) => void;
+  onNavigate?: (tab: NavTab) => void;
+  refreshTick?: number;
 }
 
-export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }: Props) {
+export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach, onNavigate, refreshTick = 0 }: Props) {
   const isCaReadOnly = userRole === 'ca';
   const [tasks, setTasks] = useState<DailyTaskRow[]>([]);
   const [amcs, setAmcs] = useState<AmcRow[]>([]);
@@ -181,7 +185,7 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
 
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [refreshTick]);
 
   const runAutonomousSweep = async () => {
     setSweeping(true);
@@ -323,6 +327,45 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
             </button>
           </div>
         )}
+      </div>
+
+      {/* Interactive Post-PO Control Sequence Strip */}
+      <div className="mini-flow-strip" aria-label="Post-PO audit and accounting flow">
+        <button
+          type="button"
+          className="mini-flow-action"
+          disabled={isCaReadOnly || sweeping}
+          onClick={runAutonomousSweep}
+        >
+          1. Expeditor Sweep
+        </button>
+        <span className="mini-flow-sep" aria-hidden="true">→</span>
+        <button
+          type="button"
+          className="mini-flow-action"
+          disabled={isCaReadOnly}
+          onClick={() => setShowAuditModal(true)}
+        >
+          2. Audit Invoice vs PO ({invoices.length})
+        </button>
+        <span className="mini-flow-sep" aria-hidden="true">→</span>
+        <button
+          type="button"
+          className="mini-flow-action"
+          onClick={() => setShowGstr2bModal(true)}
+        >
+          3. Reconcile GSTR-2B / IMS
+        </button>
+        <span className="mini-flow-sep" aria-hidden="true">→</span>
+        <a
+          href={`${API_BASE}/api/exports/tally.xml`}
+          target="_blank"
+          rel="noreferrer"
+          className="mini-flow-action"
+        >
+          4. Export Tally / Zoho
+        </a>
+        <span className="mini-flow-hint">Click any step to run it in order</span>
       </div>
 
       {/* Phase 13 — CFO Spend, Price-Creep & 43B(h) Payment Cliff Intelligence */}
@@ -619,6 +662,18 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
           </div>
         )}
       </div>
+
+      {onNavigate && (
+        <NextStepBanner
+          stepLabel="Cycle Complete → Next Reorder"
+          title="Books reconciled & Tally/Zoho exported? Start your next buying cycle"
+          description="Use 1-Click Reorder on past RFQs or drop a new BOM / WhatsApp quote in the Guided Prompt Studio."
+          primaryActionLabel="Open Guided Prompt Studio"
+          onPrimaryAction={() => onNavigate('new_task')}
+          secondaryActionLabel="1-Click Reorder in Buying & RFQs"
+          onSecondaryAction={() => onNavigate('buying')}
+        />
+      )}
 
       {/* Structured Invoice vs PO Audit Modal */}
       <ModalDialog

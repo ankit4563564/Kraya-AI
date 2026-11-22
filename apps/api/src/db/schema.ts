@@ -28,6 +28,7 @@ export const workspaces = pgTable('workspaces', {
   primaryContactPhone: text('primary_contact_phone'),
   primaryContactEmail: text('primary_contact_email'),
   onboardingCompletedAt: timestamp('onboarding_completed_at'),
+  autonomyConfigJson: jsonb('autonomy_config_json').notNull().default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -50,6 +51,12 @@ export const suppliers = pgTable('suppliers', {
   eInvoiceRequired: boolean('e_invoice_required').notNull().default(false),
   creditDays: integer('credit_days').notNull().default(30),
   reliabilityScore: integer('reliability_score').notNull().default(85),
+  onboardingStatus: text('onboarding_status').notNull().default('approved'),
+  financialHealthScore: integer('financial_health_score').notNull().default(80),
+  esgScore: integer('esg_score').notNull().default(75),
+  riskStatus: text('risk_status').notNull().default('normal'),
+  dunsNumber: text('duns_number'),
+  lastRiskAssessedAt: timestamp('last_risk_assessed_at'),
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
@@ -433,4 +440,243 @@ export const auditLogs = pgTable('audit_logs', {
   prevHash: text('prev_hash'),
   entryHash: text('entry_hash'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const gstnVerifications = pgTable(
+  'gstn_verifications',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    gstin: text('gstin').notNull(),
+    checksumValid: boolean('checksum_valid').notNull().default(true),
+    liveVerified: boolean('live_verified').notNull().default(false),
+    provider: text('provider').notNull().default('offline_checksum_only'),
+    taxpayerStatus: text('taxpayer_status').notNull().default('Unverified'),
+    legalName: text('legal_name'),
+    tradeName: text('trade_name'),
+    taxpayerType: text('taxpayer_type').notNull().default('Unknown'),
+    inferredGstRegime: text('inferred_gst_regime').notNull().default('regular'),
+    eInvoiceEnabled: boolean('e_invoice_enabled'),
+    registrationDate: text('registration_date'),
+    cancellationDate: text('cancellation_date'),
+    riskLevel: text('risk_level').notNull().default('warning'),
+    riskFlagsJson: jsonb('risk_flags_json').notNull().default([]),
+    rawSummaryJson: jsonb('raw_summary_json'),
+    verifiedAt: timestamp('verified_at').defaultNow().notNull(),
+    cacheExpiresAt: timestamp('cache_expires_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('uq_gstn_verifications_ws_gstin').on(table.workspaceId, table.gstin),
+  ]
+);
+
+export const agentRuns = pgTable('agent_runs', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull(),
+  triggerSource: text('trigger_source').notNull().default('manual'),
+  detectedState: text('detected_state').notNull(),
+  riskLevel: text('risk_level').notNull().default('low'),
+  confidence: doublePrecision('confidence').notNull().default(0.9),
+  brainMode: text('brain_mode').notNull().default('neuro_symbolic_deterministic'),
+  headline: text('headline').notNull(),
+  executiveVerdict: text('executive_verdict').notNull(),
+  reportJson: jsonb('report_json').notNull(),
+  durationMs: integer('duration_ms').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const rateLimitHits = pgTable('rate_limit_hits', {
+  id: text('id').primaryKey(),
+  bucketKey: text('bucket_key').notNull(),
+  hitAt: timestamp('hit_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+});
+
+export const automationWebhooks = pgTable('automation_webhooks', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  provider: text('provider').notNull().default('n8n'),
+  targetUrl: text('target_url').notNull(),
+  signingSecret: text('signing_secret'),
+  subscribedEventsJson: jsonb('subscribed_events_json').notNull().default(['*']),
+  enabled: boolean('enabled').notNull().default(true),
+  createdBy: text('created_by').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const automationDeliveries = pgTable('automation_deliveries', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  webhookId: text('webhook_id').references(() => automationWebhooks.id, { onDelete: 'set null' }),
+  provider: text('provider').notNull().default('n8n'),
+  eventType: text('event_type').notNull(),
+  targetUrl: text('target_url').notNull(),
+  ok: boolean('ok').notNull().default(false),
+  httpStatus: integer('http_status').notNull().default(0),
+  durationMs: integer('duration_ms').notNull().default(0),
+  responsePreview: text('response_preview'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const workspaceSubscriptions = pgTable('workspace_subscriptions', {
+  workspaceId: text('workspace_id')
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  planCode: text('plan_code').notNull().default('free_pilot'),
+  status: text('status').notNull().default('active'),
+  monthlyPriceInr: integer('monthly_price_inr').notNull().default(0),
+  razorpayOrderId: text('razorpay_order_id'),
+  razorpayPaymentId: text('razorpay_payment_id'),
+  currentPeriodStart: timestamp('current_period_start').defaultNow().notNull(),
+  currentPeriodEnd: timestamp('current_period_end'),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const supplierRiskEvents = pgTable('supplier_risk_events', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  supplierId: text('supplier_id')
+    .notNull()
+    .references(() => suppliers.id, { onDelete: 'cascade' }),
+  sourceProvider: text('source_provider').notNull().default('dnb_risk_feed'),
+  eventType: text('event_type').notNull(),
+  severity: text('severity').notNull().default('high'),
+  previousFinancialScore: integer('previous_financial_score'),
+  newFinancialScore: integer('new_financial_score'),
+  regionOrCategory: text('region_or_category'),
+  summary: text('summary').notNull(),
+  recommendedAlternativesJson: jsonb('recommended_alternatives_json').notNull().default([]),
+  triggeredRfqId: text('triggered_rfq_id').references(() => rfqs.id, { onDelete: 'set null' }),
+  status: text('status').notNull().default('open'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  resolvedAt: timestamp('resolved_at'),
+});
+
+export const supplierContracts = pgTable(
+  'supplier_contracts',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    supplierId: text('supplier_id')
+      .notNull()
+      .references(() => suppliers.id, { onDelete: 'cascade' }),
+    rfqId: text('rfq_id').references(() => rfqs.id, { onDelete: 'set null' }),
+    poId: text('po_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+    contractNumber: text('contract_number').notNull(),
+    title: text('title').notNull(),
+    contractType: text('contract_type').notNull().default('msa'),
+    status: text('status').notNull().default('under_review'),
+    effectiveFrom: text('effective_from').notNull(),
+    expiresAt: text('expires_at').notNull(),
+    autoRenew: boolean('auto_renew').notNull().default(false),
+    noticePeriodDays: integer('notice_period_days').notNull().default(30),
+    contractValuePaise: paiseCol('contract_value_paise').notNull().default(0),
+    rawContractText: text('raw_contract_text').notNull(),
+    clauseRisksJson: jsonb('clause_risks_json').notNull().default([]),
+    policyRedlinesJson: jsonb('policy_redlines_json').notNull().default([]),
+    complianceScore: integer('compliance_score').notNull().default(100),
+    fileId: text('file_id'),
+    approvedBy: text('approved_by'),
+    approvedAt: timestamp('approved_at'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('uq_contracts_ws_num').on(table.workspaceId, table.contractNumber),
+  ]
+);
+
+export const procurementBudgets = pgTable(
+  'procurement_budgets',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    department: text('department').notNull(),
+    category: text('category').notNull(),
+    periodKey: text('period_key').notNull(),
+    allocatedPaise: paiseCol('allocated_paise').notNull(),
+    committedPaise: paiseCol('committed_paise').notNull().default(0),
+    spentPaise: paiseCol('spent_paise').notNull().default(0),
+    hardStop: boolean('hard_stop').notNull().default(true),
+    alertThresholdPct: integer('alert_threshold_pct').notNull().default(80),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('uq_budgets_ws_dept_cat_period').on(
+      table.workspaceId,
+      table.department,
+      table.category,
+      table.periodKey
+    ),
+  ]
+);
+
+export const purchaseRequisitions = pgTable(
+  'purchase_requisitions',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    prNumber: text('pr_number').notNull(),
+    title: text('title').notNull(),
+    department: text('department').notNull().default('Operations'),
+    category: text('category').notNull().default('General'),
+    requestedBy: text('requested_by').notNull(),
+    budgetId: text('budget_id').references(() => procurementBudgets.id, { onDelete: 'set null' }),
+    estimatedTotalPaise: paiseCol('estimated_total_paise').notNull(),
+    itemsJson: jsonb('items_json').notNull().default([]),
+    justification: text('justification'),
+    urgency: text('urgency').notNull().default('standard'),
+    approvalTierRequired: text('approval_tier_required').notNull().default('tier_1_manager'),
+    budgetCheckStatus: text('budget_check_status').notNull().default('within_budget'),
+    policyViolationsJson: jsonb('policy_violations_json').notNull().default([]),
+    status: text('status').notNull().default('pending_approval'),
+    approvedBy: text('approved_by'),
+    approvedAt: timestamp('approved_at'),
+    rejectionReason: text('rejection_reason'),
+    linkedRfqId: text('linked_rfq_id').references(() => rfqs.id, { onDelete: 'set null' }),
+    linkedPoId: text('linked_po_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('uq_prs_ws_num').on(table.workspaceId, table.prNumber),
+  ]
+);
+
+export const supplierPerformanceLogs = pgTable('supplier_performance_logs', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  supplierId: text('supplier_id')
+    .notNull()
+    .references(() => suppliers.id, { onDelete: 'cascade' }),
+  eventSource: text('event_source').notNull(),
+  relatedEntityId: text('related_entity_id'),
+  onTimeDeliveryScore: integer('on_time_delivery_score'),
+  quantityFillRatePct: doublePrecision('quantity_fill_rate_pct'),
+  invoiceAccuracyScore: integer('invoice_accuracy_score'),
+  rfqResponseHours: doublePrecision('rfq_response_hours'),
+  previousReliabilityScore: integer('previous_reliability_score').notNull(),
+  newReliabilityScore: integer('new_reliability_score').notNull(),
+  notes: text('notes'),
+  recordedAt: timestamp('recorded_at').defaultNow().notNull(),
 });

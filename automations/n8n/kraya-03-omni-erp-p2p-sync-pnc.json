@@ -1,0 +1,335 @@
+{
+  "name": "Kraya 03 — Omni-ERP & P2P Sync PnC Router (Coupa, SAP Ariba, Tally, Zoho & UTR)",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-erp",
+      "name": "Receive ERP / P2P Sync or Payment Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-erp-sync-03",
+      "position": [
+        180,
+        320
+      ],
+      "parameters": {
+        "path": "kraya-erp-sync",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-erp",
+      "name": "Normalize Omni-ERP & IFSC Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nconst payload = body.payload || body;\nreturn [{\n  json: {\n    operation: 'erp_p2p_pnc',\n    workspaceId: String(body.workspaceId || payload.workspaceId || ''),\n    payload\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-exec-erp",
+      "name": "Execute Kraya Omni-ERP & P2P Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        680,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "kraya-erp-switch",
+      "name": "Route by ERP / P2P PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        940,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "coupa_or_sap_ariba_p2p",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-coupa_or_sap_ariba_p2p",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "coupa_or_sap_ariba_p2p",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "tally_prime_xml_push",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-tally_prime_xml_push",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "tally_prime_xml_push",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "payment_utr_settlement",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-payment_utr_settlement",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "payment_utr_settlement",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-erp-coupa",
+      "name": "Finalize Coupa / SAP Ariba P2P & 3-Way Match Arming",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, erpSystem: d.p2pResult?.provider || 'coupa', invoice3WayMatchArmed: true, processedAt: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "kraya-erp-tally",
+      "name": "Finalize Tally Prime XML Voucher Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        250
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, erpSystem: 'tally_prime', processedAt: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "kraya-erp-utr",
+      "name": "Finalize Payment UTR Settlement & Audit Seal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, erpSystem: 'bank_utr_settlement', processedAt: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "kraya-erp-zoho",
+      "name": "Finalize Zoho Books India Bill & RazorpayX Draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        510
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, erpSystem: 'zoho_books', processedAt: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "kraya-erp-respond",
+      "name": "Respond ERP Sync Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1500,
+        320
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive ERP / P2P Sync or Payment Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Omni-ERP & IFSC Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Omni-ERP & IFSC Input": {
+      "main": [
+        [
+          {
+            "node": "Execute Kraya Omni-ERP & P2P Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Kraya Omni-ERP & P2P Engine": {
+      "main": [
+        [
+          {
+            "node": "Route by ERP / P2P PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by ERP / P2P PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Finalize Coupa / SAP Ariba P2P & 3-Way Match Arming",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize Tally Prime XML Voucher Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize Payment UTR Settlement & Audit Seal",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Finalize Zoho Books India Bill & RazorpayX Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Coupa / SAP Ariba P2P & 3-Way Match Arming": {
+      "main": [
+        [
+          {
+            "node": "Respond ERP Sync Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Tally Prime XML Voucher Receipt": {
+      "main": [
+        [
+          {
+            "node": "Respond ERP Sync Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Payment UTR Settlement & Audit Seal": {
+      "main": [
+        [
+          {
+            "node": "Respond ERP Sync Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Zoho Books India Bill & RazorpayX Draft": {
+      "main": [
+        [
+          {
+            "node": "Respond ERP Sync Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

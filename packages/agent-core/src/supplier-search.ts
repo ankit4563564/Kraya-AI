@@ -2,6 +2,7 @@ import { validateGstin, computeGstinChecksum, INDIAN_STATE_CODES } from '@kraya/
 import { fetchWithTimeoutAndRetry } from './http-utils.js';
 import { resolveLocationAndRoadDistance } from './location-engine.js';
 import { verifySupplierGlobalRegistry } from './verification-engine.js';
+import { DEFAULT_GEMINI_MODEL } from './realtime-context.js';
 
 export interface RealtimeSupplierCriteria {
   query: string;
@@ -88,7 +89,7 @@ export interface SupplierDiscoveryResult {
 export async function searchSuppliersRealtime(
   options: RealtimeSupplierCriteria,
   apiKey?: string,
-  model = 'gemini-3.5-flash-lite'
+  model = DEFAULT_GEMINI_MODEL
 ): Promise<SupplierDiscoveryResult> {
   const buyerStateCode = options.buyerStateCode || '29'; // Default Karnataka
   const buyerWaccPct = options.buyerWaccPct ?? 14.0; // Standard MSME 14% working capital cost

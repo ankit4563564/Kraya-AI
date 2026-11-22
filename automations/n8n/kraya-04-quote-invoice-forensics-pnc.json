@@ -1,0 +1,412 @@
+{
+  "name": "Kraya 04 — Vendor Quote, BOM & PDF Invoice Forensics 4-Branch PnC Pipeline",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-doc",
+      "name": "Receive Vendor Quote / PDF / Email",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-ingest-doc-04",
+      "position": [
+        160,
+        320
+      ],
+      "parameters": {
+        "path": "kraya-ingest-doc",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-doc",
+      "name": "Prepare Signed Email/PDF Ingest Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nconst workspaceId = String(body.workspaceId || 'ws-primary');\nconst deliveryId = String(body.messageId || ('n8n-doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7)));\nconst timestampSec = String(Math.floor(Date.now() / 1000));\nconst textContent = String(body.text || body.promptText || 'Shree Ganesh Packaging quoted 5-ply boxes @ Rs 22 + 18% GST, freight Rs 2500, Net 30 days credit.');\nreturn [{\n  json: {\n    workspaceId,\n    deliveryId,\n    timestampSec,\n    emailPayload: {\n      messageId: deliveryId,\n      fromName: body.fromName || body.supplierName || 'Vendor',\n      fromEmail: body.fromEmail || 'sales@vendor.in',\n      subject: body.subject || 'Vendor Procurement Submission',\n      text: textContent,\n      attachments: Array.isArray(body.attachments) ? body.attachments : undefined\n    }\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-post-email",
+      "name": "Ingest Into Kraya Vault & Unified Inbox",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        650,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/webhooks/email-inbound",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            },
+            {
+              "name": "x-kraya-workspace-id",
+              "value": "={{ $json.workspaceId }}"
+            },
+            {
+              "name": "x-kraya-webhook-timestamp",
+              "value": "={{ $json.timestampSec }}"
+            },
+            {
+              "name": "x-kraya-delivery-id",
+              "value": "={{ $json.deliveryId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.emailPayload) }}",
+        "options": {
+          "timeout": 25000
+        }
+      }
+    },
+    {
+      "id": "kraya-run-intake-agent",
+      "name": "Run Agent 1 (Intake & Document Forensics)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        900,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/agent-run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workspaceId: $(\"Prepare Signed Email/PDF Ingest Envelope\").item.json.workspaceId, agentId: \"intake\", promptText: $(\"Prepare Signed Email/PDF Ingest Envelope\").item.json.emailPayload.text, skipNetwork: true }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "kraya-classify-doc",
+      "name": "Classify Forensics PnC Outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        320
+      ],
+      "parameters": {
+        "jsCode": "const ingested = $(\"Ingest Into Kraya Vault & Unified Inbox\").item.json || {};\nconst agent = $input.first().json || {};\nconst state = String(agent.report?.detectedState || 'clean_quote');\nconst question = agent.report?.structuredData?.focusedClarificationQuestion || null;\n\nlet pncBranch = 'clean_verified_extraction';\nif (state === 'prompt_injection_blocked') {\n  pncBranch = 'security_prompt_injection_blocked';\n} else if (state === 'math_mismatch_invoice') {\n  pncBranch = 'invoice_discrepancy_or_leak';\n} else if (state === 'ambiguous_hinglish_quote' || state === 'handwritten_parchi_low_conf' || Boolean(question)) {\n  pncBranch = 'ambiguous_quote_clarification_needed';\n}\n\nreturn [{\n  json: {\n    ok: Boolean(ingested.ok || agent.ok),\n    pncBranch,\n    attachmentsIngested: ingested.attachmentsIngested ?? 0,\n    sourceEventId: ingested.ingested?.sourceEvent?.id || null,\n    fileId: ingested.ingested?.sourceEvent?.fileId || null,\n    forensicsAgentRunId: agent.runId || null,\n    detectedState: state,\n    riskLevel: agent.report?.riskLevel || 'low',\n    headline: agent.report?.headline || null,\n    executiveVerdict: agent.report?.executiveVerdict || null,\n    clarificationQuestion: question,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-doc-switch",
+      "name": "Route by Document Forensics PnC Branch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1380,
+        320
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "security_prompt_injection_blocked",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-security_prompt_injection_blocked",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "security_prompt_injection_blocked",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "invoice_discrepancy_or_leak",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-invoice_discrepancy_or_leak",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "invoice_discrepancy_or_leak",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "ambiguous_quote_clarification_needed",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-ambiguous_quote_clarification_needed",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "ambiguous_quote_clarification_needed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-doc-sec",
+      "name": "Quarantine Prompt Injection Attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        120
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, actionTaken: 'QUARANTINED_PROMPT_INJECTION' } }];"
+      }
+    },
+    {
+      "id": "kraya-doc-leak",
+      "name": "Flag Invoice Arithmetic / Tax Discrepancy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        250
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, actionTaken: 'PAYMENT_HELD_DISPUTE_DRAFTED' } }];"
+      }
+    },
+    {
+      "id": "kraya-doc-clarify",
+      "name": "Queue 1-Click Vendor Clarification Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        380
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, actionTaken: 'VENDOR_CLARIFICATION_QUEUED' } }];"
+      }
+    },
+    {
+      "id": "kraya-doc-clean",
+      "name": "Confirm Clean Math-Reconciled Extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        510
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, actionTaken: 'READY_FOR_CFO_RANKING_OR_3WAY_MATCH' } }];"
+      }
+    },
+    {
+      "id": "kraya-doc-respond",
+      "name": "Return Forensics Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1900,
+        320
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Vendor Quote / PDF / Email": {
+      "main": [
+        [
+          {
+            "node": "Prepare Signed Email/PDF Ingest Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Signed Email/PDF Ingest Envelope": {
+      "main": [
+        [
+          {
+            "node": "Ingest Into Kraya Vault & Unified Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest Into Kraya Vault & Unified Inbox": {
+      "main": [
+        [
+          {
+            "node": "Run Agent 1 (Intake & Document Forensics)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Agent 1 (Intake & Document Forensics)": {
+      "main": [
+        [
+          {
+            "node": "Classify Forensics PnC Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Forensics PnC Outcome": {
+      "main": [
+        [
+          {
+            "node": "Route by Document Forensics PnC Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Document Forensics PnC Branch": {
+      "main": [
+        [
+          {
+            "node": "Quarantine Prompt Injection Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag Invoice Arithmetic / Tax Discrepancy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue 1-Click Vendor Clarification Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Confirm Clean Math-Reconciled Extraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quarantine Prompt Injection Attempt": {
+      "main": [
+        [
+          {
+            "node": "Return Forensics Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag Invoice Arithmetic / Tax Discrepancy": {
+      "main": [
+        [
+          {
+            "node": "Return Forensics Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue 1-Click Vendor Clarification Prompt": {
+      "main": [
+        [
+          {
+            "node": "Return Forensics Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Clean Math-Reconciled Extraction": {
+      "main": [
+        [
+          {
+            "node": "Return Forensics Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

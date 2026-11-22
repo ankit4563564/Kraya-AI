@@ -1,0 +1,281 @@
+{
+  "name": "Kraya 10 — Connected 6-Step Procurement Pipeline & Closed-Loop Data Lake Feedback PnC",
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "kraya-wh-6step",
+      "name": "Trigger Connected 6-Step Pipeline or Post-Transaction Feedback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "kraya-integrated-6step-10",
+      "position": [
+        180,
+        300
+      ],
+      "parameters": {
+        "path": "kraya-integrated-6step",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "kraya-prep-6step",
+      "name": "Normalize Pipeline / Feedback Telemetry Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        430,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst body = raw.body || raw;\nreturn [{\n  json: {\n    ...body,\n    operation: 'integrated_6step_or_feedback_pnc'\n  }\n}];"
+      }
+    },
+    {
+      "id": "kraya-exec-6step",
+      "name": "Execute Kraya 6-Step Pipeline & Data Lake Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "onError": "continueRegularOutput",
+      "position": [
+        690,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8787/api/internal/n8n/enterprise/execute",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-kraya-webhook-secret",
+              "value": "kraya-inbound-secret"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 20000
+        }
+      }
+    },
+    {
+      "id": "kraya-6step-switch",
+      "name": "Route by Closed-Loop Execution & Feedback PnC",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        950,
+        300
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "outputKey": "full_6step_pipeline_executed",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-full_6step_pipeline_executed",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "full_6step_pipeline_executed",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "outputKey": "post_transaction_reliability_upgraded",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "cond-post_transaction_reliability_upgraded",
+                    "leftValue": "={{ $json.pncBranch }}",
+                    "rightValue": "post_transaction_reliability_upgraded",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    },
+    {
+      "id": "kraya-6step-full",
+      "name": "Confirm Full 6-Step Manager Pipeline & Coupa Sync",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        140
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, closedLoopStatus: 'FULL_6STEP_RISK_TO_COUPA_AND_DATALAKE_COMPLETE' } }];"
+      }
+    },
+    {
+      "id": "kraya-6step-up",
+      "name": "Upgrade Supplier Reliability Score in Sourcing Data Lake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, closedLoopStatus: 'SUPPLIER_RELIABILITY_UPGRADED_FOR_FUTURE_SOURCING' } }];"
+      }
+    },
+    {
+      "id": "kraya-6step-down",
+      "name": "Penalize Supplier Reliability Score & Flag Sourcing Watch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        460
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { ...d, closedLoopStatus: 'SUPPLIER_RELIABILITY_DOWNGRADED_DUE_TO_DELAY_OR_LEAK' } }];"
+      }
+    },
+    {
+      "id": "kraya-6step-respond",
+      "name": "Return 6-Step & Data Lake Verdict",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1510,
+        300
+      ],
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Trigger Connected 6-Step Pipeline or Post-Transaction Feedback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Pipeline / Feedback Telemetry Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Pipeline / Feedback Telemetry Input": {
+      "main": [
+        [
+          {
+            "node": "Execute Kraya 6-Step Pipeline & Data Lake Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Kraya 6-Step Pipeline & Data Lake Engine": {
+      "main": [
+        [
+          {
+            "node": "Route by Closed-Loop Execution & Feedback PnC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Closed-Loop Execution & Feedback PnC": {
+      "main": [
+        [
+          {
+            "node": "Confirm Full 6-Step Manager Pipeline & Coupa Sync",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upgrade Supplier Reliability Score in Sourcing Data Lake",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Penalize Supplier Reliability Score & Flag Sourcing Watch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Full 6-Step Manager Pipeline & Coupa Sync": {
+      "main": [
+        [
+          {
+            "node": "Return 6-Step & Data Lake Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upgrade Supplier Reliability Score in Sourcing Data Lake": {
+      "main": [
+        [
+          {
+            "node": "Return 6-Step & Data Lake Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Penalize Supplier Reliability Score & Flag Sourcing Watch": {
+      "main": [
+        [
+          {
+            "node": "Return 6-Step & Data Lake Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

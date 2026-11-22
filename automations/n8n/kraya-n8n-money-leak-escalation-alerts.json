@@ -1,0 +1,102 @@
+{
+  "name": "Kraya — Money Leak & 43B(h) Escalation Alerts",
+  "nodes": [
+    {
+      "id": "kraya-webhook",
+      "name": "Kraya Signed Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "path": "kraya-money-leak-alerts",
+        "httpMethod": "POST",
+        "responseMode": "onReceived"
+      }
+    },
+    {
+      "id": "format-alert",
+      "name": "Format CFO Alert Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "msg",
+              "name": "alertText",
+              "type": "string",
+              "value": "=🚨 KRAYA CFO ALERT [{{ $json.body.eventType }}]\nWorkspace: {{ $json.body.workspaceId }}\nSummary: {{ $json.body.payload.headline || $json.body.payload.cfoVerdict || \"Action required\" }}\nExposure: ₹{{ (($json.body.payload.totalMoneyLeakPaise || 0) / 100).toFixed(2) }}\nIMS Action: {{ $json.body.payload.imsSuggestedAction || \"REVIEW\" }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "slack-notify",
+      "name": "Notify Finance Channel (Slack / Swap for WhatsApp or Telegram)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        740,
+        220
+      ],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "text": "={{ $json.alertText }}"
+      }
+    },
+    {
+      "id": "sheets-log",
+      "name": "Append to CFO Money Leak Ledger (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        740,
+        380
+      ],
+      "parameters": {
+        "operation": "append",
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Kraya Signed Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Format CFO Alert Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format CFO Alert Message": {
+      "main": [
+        [
+          {
+            "node": "Notify Finance Channel (Slack / Swap for WhatsApp or Telegram)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Append to CFO Money Leak Ledger (Google Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

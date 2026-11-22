@@ -52,6 +52,52 @@ export interface AppEnv {
   LOCAL_VAULT_DIR?: string;
   GOOGLE_MAPS_API_KEY?: string;
   OPENCORPORATES_API_KEY?: string;
+  SERPER_API_KEY?: string;
+  TAVILY_API_KEY?: string;
+  GSTN_API_PROVIDER?: string;
+  GSTN_API_KEY?: string;
+  GSTN_API_URL?: string;
+  GSTIN_LOOKUP_API_KEY?: string;
+  GSTIN_LOOKUP_API_URL?: string;
+  UDYAM_API_PROVIDER?: string;
+  UDYAM_API_KEY?: string;
+  UDYAM_API_URL?: string;
+  ZOHO_BOOKS_ACCESS_TOKEN?: string;
+  ZOHO_BOOKS_ORG_ID?: string;
+  ZOHO_BOOKS_API_DOMAIN?: string;
+  TALLY_SERVER_URL?: string;
+  TALLY_AUTH_HEADER?: string;
+  COUPA_API_URL?: string;
+  COUPA_API_KEY?: string;
+  SAP_ARIBA_API_URL?: string;
+  SAP_ARIBA_API_KEY?: string;
+  DNB_API_KEY?: string;
+  RAZORPAYX_KEY_ID?: string;
+  RAZORPAYX_KEY_SECRET?: string;
+  RAZORPAYX_ACCOUNT_NUMBER?: string;
+  RAZORPAY_KEY_ID?: string;
+  RAZORPAY_KEY_SECRET?: string;
+  RAZORPAY_WEBHOOK_SECRET?: string;
+  N8N_API_URL?: string;
+  N8N_API_KEY?: string;
+  N8N_DEFAULT_WEBHOOK_URL?: string;
+  N8N_WEBHOOK_SECRET?: string;
+  CRON_SECRET?: string;
+  DATABASE_URL_UNPOOLED?: string;
+  NEON_BRANCH?: string;
+  NEON_BRANCH_ID?: string;
+  NEON_FUNCTION_HOST_SUFFIX?: string;
+  NEON_AUTH_BASE_URL?: string;
+  NEON_AUTH_JWKS_URL?: string;
+  NEON_REALTIME_URL?: string;
+  NEON_REALTIME_SECRET?: string;
+  NEON_AI_GATEWAY_TOKEN?: string;
+  NEON_AI_GATEWAY_BASE_URL?: string;
+  DISTRIBUTED_RATE_LIMIT?: string;
+  RATE_LIMIT_KV?: {
+    get(key: string): Promise<string | null>;
+    put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
+  };
 }
 
 export interface AuthContext {

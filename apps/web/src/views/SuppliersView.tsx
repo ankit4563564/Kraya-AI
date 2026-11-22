@@ -9,9 +9,11 @@ import {
   Compass,
 } from 'lucide-react';
 import { apiJson, formatINR, SupplierRecord, UserRole } from '../lib/api';
+import { NavTab } from '../lib/workflow';
 import { ModalDialog } from '../components/ModalDialog';
 import { OutreachModalRequest } from '../components/OutreachModal';
 import { SupplierDiscoveryModal } from '../components/SupplierDiscoveryModal';
+import { NextStepBanner } from '../components/WorkflowJourneyRail';
 
 interface TimelineResponse {
   events: Array<{ id: string; channel: string; parsedSummary: string; createdAt: string }>;
@@ -24,15 +26,32 @@ interface Props {
   userRole: UserRole;
   onDataMutated: () => void;
   onOpenOutreach: (req: OutreachModalRequest) => void;
+  onNavigate?: (tab: NavTab) => void;
+  refreshTick?: number;
 }
 
-export function SuppliersView({ userRole, onDataMutated, onOpenOutreach }: Props) {
+export function SuppliersView({ userRole, onDataMutated, onOpenOutreach, onNavigate, refreshTick = 0 }: Props) {
   const isCaReadOnly = userRole === 'ca';
   const [suppliers, setSuppliers] = useState<SupplierRecord[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [showDiscover, setShowDiscover] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<SupplierRecord | null>(null);
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [gstnLiveResults, setGstnLiveResults] = useState<
+    Record<
+      string,
+      {
+        taxpayerStatus: string;
+        taxpayerType: string;
+        liveVerified: boolean;
+        fromCache: boolean;
+        riskLevel: string;
+        filingComplianceNote: string;
+        officialPortalUrl: string;
+      }
+    >
+  >({});
 
   // Add Supplier Form
   const [name, setName] = useState('');
@@ -55,7 +74,36 @@ export function SuppliersView({ userRole, onDataMutated, onOpenOutreach }: Props
 
   useEffect(() => {
     load();
-  }, []);
+  }, [refreshTick]);
+
+  const handleLiveVerifyGstin = async (sup: SupplierRecord) => {
+    if (!sup.gstin) return;
+    setVerifyingId(sup.id);
+    try {
+      const res = await apiJson<{
+        taxpayerStatus: string;
+        taxpayerType: string;
+        liveVerified: boolean;
+        fromCache: boolean;
+        riskLevel: string;
+        filingComplianceNote: string;
+        officialPortalUrl: string;
+      }>('/api/gstin/verify-live', {
+        method: 'POST',
+        body: JSON.stringify({
+          gstin: sup.gstin,
+          supplierId: sup.id,
+          applyToSupplier: !isCaReadOnly,
+        }),
+      });
+      setGstnLiveResults((prev) => ({ ...prev, [sup.id]: res }));
+      load();
+    } catch {
+      // ignore transient error
+    } finally {
+      setVerifyingId(null);
+    }
+  };
 
   const handleGstinChange = async (val: string) => {
     const clean = val.trim().toUpperCase();
@@ -191,6 +239,19 @@ export function SuppliersView({ userRole, onDataMutated, onOpenOutreach }: Props
                         {s.gstRegime}
                       </span>
                       {s.eInvoiceRequired && <span className="pill pill-accent">IRN Req (&gt;₹5Cr)</span>}
+                      {gstnLiveResults[s.id] && (
+                        <a
+                          href={gstnLiveResults[s.id].officialPortalUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`pill ${gstnLiveResults[s.id].riskLevel === 'critical' ? 'pill-danger' : gstnLiveResults[s.id].liveVerified ? 'pill-success' : 'pill-warning'}`}
+                          title={gstnLiveResults[s.id].filingComplianceNote}
+                        >
+                          {gstnLiveResults[s.id].liveVerified
+                            ? `GSTN: ${gstnLiveResults[s.id].taxpayerStatus}`
+                            : 'Mod-36 OK · Portal ↗'}
+                        </a>
+                      )}
                     </div>
                   </td>
                   <td data-label="Udyam (43B-h)">
@@ -213,6 +274,18 @@ export function SuppliersView({ userRole, onDataMutated, onOpenOutreach }: Props
                   </td>
                   <td data-label="Actions">
                     <div className="row">
+                      {s.gstin && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={verifyingId === s.id}
+                          onClick={() => handleLiveVerifyGstin(s)}
+                          title="Verify GSTN status (30-day cached)"
+                        >
+                          <ShieldCheck size={13} />{' '}
+                          {verifyingId === s.id ? 'Checking...' : 'Verify GSTN'}
+                        </button>
+                      )}
                       <button type="button" className="btn btn-sm" onClick={() => openTimeline(s)}>
                         <History size={13} /> History
                       </button>
@@ -237,6 +310,18 @@ export function SuppliersView({ userRole, onDataMutated, onOpenOutreach }: Props
             </tbody>
           </table>
         </div>
+      )}
+
+      {onNavigate && (
+        <NextStepBanner
+          stepLabel="Step 1 → Step 2"
+          title="Suppliers verified? Float an RFQ & collect quotes next"
+          description="Create an RFQ or drop WhatsApp/Email replies from your vendors to compare Credit-Adjusted Landed Cost and unlock AI BATNA negotiation."
+          primaryActionLabel="Go to Buying & RFQs"
+          onPrimaryAction={() => onNavigate('buying')}
+          secondaryActionLabel="Open Guided Prompt Studio"
+          onSecondaryAction={() => onNavigate('new_task')}
+        />
       )}
 
       {/* Add Supplier Modal */}

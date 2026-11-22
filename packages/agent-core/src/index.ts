@@ -1,4 +1,7 @@
 export * from './constitution.js';
+export * from './http-utils.js';
+export * from './realtime-context.js';
+export * from './gstn-live.js';
 export * from './gemini.js';
 export * from './groq-asr.js';
 export * from './elevenlabs.js';
@@ -13,3 +16,6 @@ export * from './location-engine.js';
 export * from './verification-engine.js';
 export * from './bom-import.js';
 export * from './autonomous-sweep.js';
+export * from './enterprise-frameworks.js';
+export * from './agents/index.js';
+export * from './connectors/index.js';
