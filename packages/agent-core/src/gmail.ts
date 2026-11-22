@@ -53,7 +53,6 @@ export interface GoogleOAuthTokenResponse {
 export const GMAIL_DEFAULT_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
@@ -435,4 +434,25 @@ export async function downloadGmailAttachmentBytes(params: {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+/**
+ * Revokes an OAuth token (access or refresh token) using Google's OAuth 2.0 revocation endpoint.
+ */
+export async function revokeGoogleOAuthToken(token: string): Promise<boolean> {
+  if (!token?.trim()) return true;
+  try {
+    const res = await fetchWithTimeoutAndRetry(
+      'https://oauth2.googleapis.com/revoke',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: token.trim() }).toString(),
+      },
+      { timeoutMs: 10_000, maxRetries: 2 }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
