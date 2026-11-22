@@ -11,7 +11,7 @@ import {
 } from './storage.js';
 
 export async function persistWorkspaceFile(params: {
-  db: KrayaDb;
+  db: KrayaDb | any;
   storage: PersistentVaultStorage;
   workspaceId: string;
   uploadedByUserId: string | null;

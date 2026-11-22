@@ -24,6 +24,12 @@ export interface ExtractedItem {
 
 export interface ExtractedProcurementPayload {
   engine: 'gemini_live' | 'deterministic_local';
+  modelUsed?: string;
+  tokenUsage?: {
+    promptTokens?: number;
+    candidateTokens?: number;
+    totalTokens?: number;
+  };
   documentKind: 'quote' | 'invoice' | 'rfq_request' | 'maintenance_note' | 'followup_note';
   supplierName: string | null;
   supplierPhone: string | null;
@@ -152,6 +158,7 @@ export async function extractWithGemini(
   }
 
   let res: Response | null = null;
+  let matchedModel = '';
   let lastErr = '';
   for (const model of candidates) {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(opts.apiKey)}`;
@@ -174,6 +181,7 @@ export async function extractWithGemini(
       );
       if (attempt.ok) {
         res = attempt;
+        matchedModel = model;
         break;
       }
       lastErr = await attempt.text().catch(() => '');
@@ -192,6 +200,11 @@ export async function extractWithGemini(
 
   const data = (await res.json()) as {
     candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
   };
 
   const rawJsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -206,6 +219,14 @@ export async function extractWithGemini(
 
   return {
     engine: 'gemini_live',
+    modelUsed: matchedModel || undefined,
+    tokenUsage: data.usageMetadata
+      ? {
+          promptTokens: data.usageMetadata.promptTokenCount,
+          candidateTokens: data.usageMetadata.candidatesTokenCount,
+          totalTokens: data.usageMetadata.totalTokenCount,
+        }
+      : undefined,
     documentKind: parsed.documentKind ?? 'quote',
     supplierName: parsed.supplierName ?? null,
     supplierPhone: parsed.supplierPhone ?? null,

@@ -253,17 +253,40 @@ if (!resendKey) {
     const r = await fetch('https://api.resend.com/domains', {
       headers: { Authorization: `Bearer ${resendKey}` },
     });
-    if (!r.ok) {
-      const txt = await r.text();
-      throw new Error(`HTTP ${r.status}: ${txt.slice(0, 160)}`);
+    if (r.ok) {
+      const body = await r.json();
+      const count = Array.isArray(body?.data) ? body.data.length : 0;
+      logResult(
+        '6. Resend Transactional Email API (RESEND_API_KEY)',
+        'LIVE_VERIFIED',
+        `Authenticated with Resend API (${count} configured domain(s)).`
+      );
+    } else {
+      // Fallback for Sending-Access restricted keys: verify via Resend test sink
+      const probe = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: (process.env.RESEND_FROM_EMAIL || '').trim() || 'onboarding@resend.dev',
+          to: ['delivered@resend.dev'],
+          subject: 'Kraya Resend Health Verification Probe',
+          text: 'Verified live Resend transactional email connectivity.',
+        }),
+      });
+      if (!probe.ok) {
+        const txt = await probe.text();
+        throw new Error(`HTTP ${probe.status}: ${txt.slice(0, 160)}`);
+      }
+      const pBody = await probe.json();
+      logResult(
+        '6. Resend Transactional Email API (RESEND_API_KEY)',
+        'LIVE_VERIFIED',
+        `Authenticated with Resend Sending API (Probe receipt id="${pBody.id}" delivered to official sink).`
+      );
     }
-    const body = await r.json();
-    const count = Array.isArray(body?.data) ? body.data.length : 0;
-    logResult(
-      '6. Resend Transactional Email API (RESEND_API_KEY)',
-      'LIVE_VERIFIED',
-      `Authenticated with Resend API (${count} configured domain(s)).`
-    );
   } catch (err) {
     logResult('6. Resend Transactional Email API (RESEND_API_KEY)', 'FAILED', err.message);
   }

@@ -162,7 +162,7 @@ export function OutreachModal({ request, defaultLanguage, onClose }: Props) {
     }
   };
 
-  const handleDirectLiveSend = async (channel: 'whatsapp_cloud_api' | 'resend_email') => {
+  const handleDirectLiveSend = async (channel: 'whatsapp_cloud_api' | 'resend_email' | 'gmail_api') => {
     if (!editedBody.trim()) return;
     setLiveSending(true);
     setLiveReceipt(null);
@@ -321,6 +321,14 @@ export function OutreachModal({ request, defaultLanguage, onClose }: Props) {
               onClick={() => handleDirectLiveSend('resend_email')}
             >
               Send Live Email (Resend)
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={liveSending || !request?.supplierEmail}
+              onClick={() => handleDirectLiveSend('gmail_api')}
+            >
+              Send via Gmail API
             </button>
             <button
               type="button"

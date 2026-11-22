@@ -72,7 +72,14 @@ export type MoneyLeakType =
 export type Severity = 'critical' | 'warning' | 'info';
 
 export interface ComplianceFlag {
-  code: MoneyLeakType | 'blocked_credit_17_5' | 'rule37_180d_warning' | 'tds_194c' | 'tds_194q' | 'invalid_gstin';
+  code:
+    | MoneyLeakType
+    | 'blocked_credit_17_5'
+    | 'rule37_180d_warning'
+    | 'rule42_43_partial_itc'
+    | 'tds_194c'
+    | 'tds_194q'
+    | 'invalid_gstin';
   severity: Severity;
   title: string;
   detail: string;

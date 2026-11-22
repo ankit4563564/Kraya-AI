@@ -680,3 +680,17 @@ export const supplierPerformanceLogs = pgTable('supplier_performance_logs', {
   notes: text('notes'),
   recordedAt: timestamp('recorded_at').defaultNow().notNull(),
 });
+
+
+export const integrationHealth = pgTable('integration_health', {
+  id: text('id').primaryKey(),
+  serviceKey: text('service_key').notNull().unique(),
+  status: text('status').notNull(),
+  providerMode: text('provider_mode').notNull(),
+  lastTestedAt: timestamp('last_tested_at'),
+  lastSuccessAt: timestamp('last_success_at'),
+  lastError: text('last_error'),
+  latencyMs: integer('latency_ms'),
+  detailsJson: jsonb('details_json'),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});

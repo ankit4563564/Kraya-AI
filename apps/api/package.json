@@ -6,7 +6,7 @@
     "dev": "tsx watch src/node-server.ts",
     "start": "node dist/node-server.js",
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --fileParallelism=false",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

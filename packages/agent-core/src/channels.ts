@@ -8,9 +8,15 @@ import { fetchWithTimeoutAndRetry } from './http-utils.js';
  * 3. Inbound Webhook Normalizers (WhatsApp Cloud API + Cloudflare Email Routing)
  */
 
+export interface EmailAttachment {
+  filename: string;
+  content: string; // Base64 encoded string
+  contentType?: string;
+}
+
 export interface LiveSendReceipt {
   accepted: boolean;
-  channel: 'whatsapp_cloud_api' | 'resend_email';
+  channel: 'whatsapp_cloud_api' | 'resend_email' | 'gmail_api';
   providerMessageId: string | null;
   statusNote: string;
 }
@@ -64,15 +70,82 @@ export async function sendViaWhatsAppCloudApi(params: {
   };
 }
 
+export interface ResendDomainInfo {
+  id: string;
+  name: string;
+  status: string;
+  region: string;
+  createdAt: string;
+}
+
+export async function checkResendHealth(apiKey: string): Promise<{
+  ok: boolean;
+  status: 'CONNECTED';
+  domains: ResendDomainInfo[];
+  apiKeysVerified: boolean;
+}> {
+  const res = await fetchWithTimeoutAndRetry(
+    'https://api.resend.com/domains',
+    {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    },
+    { timeoutMs: 8_000, maxRetries: 1 }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Resend API error (${res.status}): ${errText.slice(0, 150)}`);
+  }
+
+  const data = (await res.json()) as { data?: Array<Record<string, unknown>> };
+  const domains: ResendDomainInfo[] = (data?.data ?? []).map((d) => ({
+    id: String(d.id || ''),
+    name: String(d.name || ''),
+    status: String(d.status || 'unknown'),
+    region: String(d.region || 'us-east-1'),
+    createdAt: String(d.created_at || ''),
+  }));
+
+  return {
+    ok: true,
+    status: 'CONNECTED',
+    domains,
+    apiKeysVerified: true,
+  };
+}
+
 export async function sendViaResendEmail(params: {
   apiKey: string;
   fromEmail: string;
   toEmail: string;
   subject: string;
   bodyText: string;
+  htmlText?: string;
+  attachments?: EmailAttachment[];
+  tags?: Array<{ name: string; value: string }>;
 }): Promise<LiveSendReceipt> {
   if (!params.toEmail.includes('@')) {
     throw new Error('Valid recipient email address is required.');
+  }
+
+  const bodyPayload: Record<string, unknown> = {
+    from: params.fromEmail,
+    to: [params.toEmail],
+    subject: params.subject,
+    text: params.bodyText,
+  };
+  if (params.htmlText) {
+    bodyPayload.html = params.htmlText;
+  }
+  if (Array.isArray(params.attachments) && params.attachments.length > 0) {
+    bodyPayload.attachments = params.attachments.map((att) => ({
+      filename: att.filename,
+      content: att.content,
+      content_type: att.contentType,
+    }));
+  }
+  if (Array.isArray(params.tags) && params.tags.length > 0) {
+    bodyPayload.tags = params.tags;
   }
 
   const res = await fetchWithTimeoutAndRetry(
@@ -83,12 +156,7 @@ export async function sendViaResendEmail(params: {
         Authorization: `Bearer ${params.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        from: params.fromEmail,
-        to: [params.toEmail],
-        subject: params.subject,
-        text: params.bodyText,
-      }),
+      body: JSON.stringify(bodyPayload),
     },
     { timeoutMs: 15_000, maxRetries: 2 }
   );

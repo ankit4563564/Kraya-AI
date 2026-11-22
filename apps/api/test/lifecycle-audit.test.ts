@@ -151,6 +151,18 @@ describe('Phase 9 & 10 — GRN Partial Deliveries, PO Amend/Cancel, Credit Notes
     expect(amendedPo.taxablePaise).toBe(6000 * 2150); // ₹1,29,000 exact
     expect(amendedPo.revisionsJson.length).toBe(1);
 
+    // 4B. Validation Guard: Invalid GRN quantities (accepted > received) returns clean 400
+    const invalidGrnRes = await app.request('/api/grns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({
+        poId: po.id,
+        items: [{ itemKey: '5-ply-corrugated-box', receivedQty: 100, acceptedQty: 150, rejectedQty: 0 }],
+      }),
+    });
+    expect(invalidGrnRes.status).toBe(400);
+    expect((await invalidGrnRes.json()).error).toContain('cannot exceed receivedQty');
+
     // 5. Partial GRN 1 (2,100 received, 2,000 accepted, 100 wet/rejected on 2026-11-10)
     const grn1Res = await app.request('/api/grns', {
       method: 'POST',

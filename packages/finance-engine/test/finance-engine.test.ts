@@ -227,6 +227,24 @@ describe('2. GST 2.0, Intra/Inter Split, Composition Trap, Freight/GTA & Blocked
     expect(flag?.code).toBe('wrong_tax_split_state');
     expect(flag?.impactPaise).toBe(toPaise(9000));
   });
+
+  it('correctly calculates Rule 42/43 partial ITC restriction (80%) and flags non-creditable GST capitalized into cost', () => {
+    const res = computeGstLine({
+      taxablePaise: toPaise(100000), // ₹1,00,000 taxable
+      gstRatePct: 18, // 18% GST = ₹18,000
+      buyer: MH_REGULAR_BUYER,
+      supplier: mhRegularVendor,
+      itcRecoveryPct: 80, // 80% creditable, 20% non-creditable under Rule 42/43
+    });
+
+    expect(res.totalGstPaise).toBe(toPaise(18000));
+    expect(res.itcRecoverablePaise).toBe(toPaise(14400)); // 80% of 18,000 = ₹14,400
+    expect(res.nonRecoverableGstPaise).toBe(toPaise(3600)); // 20% of 18,000 = ₹3,600
+    expect(res.flags.some((f) => f.code === 'rule42_43_partial_itc')).toBe(true);
+    const rule42Flag = res.flags.find((f) => f.code === 'rule42_43_partial_itc');
+    expect(rule42Flag?.impactPaise).toBe(toPaise(3600));
+    expect(rule42Flag?.statutoryRef).toContain('Rule 42 & 43');
+  });
 });
 
 describe('3. Unit Normalization & Hinglish Shorthand Parser', () => {
@@ -443,6 +461,143 @@ describe('4. Credit-Adjusted Real Cost, Working-Capital Math & Section 43B(h) MS
     expect(fromPaise(res.netLandedUnitPaise)).toBeCloseTo(29.5, 2);
     expect(res.isPriceCreepAlert).toBe(true);
     expect(res.priceDeltaPct).toBeGreaterThan(9);
+  });
+
+  describe('Cash Discount Validation & Boundary Hardening', () => {
+    const testVendor: SupplierTaxProfile = {
+      id: 'sup-cd',
+      name: 'Alpha Packaging Ltd',
+      stateCode: '27',
+      gstRegime: 'regular',
+      udyamTier: 'medium',
+    };
+
+    it('preserves valid zero cash discount (0%)', () => {
+      const res = computeLandedCost(
+        {
+          quoteId: 'q-cd-0',
+          supplier: testVendor,
+          quantity: 100,
+          rawRateRupees: 100,
+          rawUnit: 'pc',
+          creditDays: 0,
+          cashDiscountPct: 0,
+          gstPct: 18,
+        },
+        MH_REGULAR_BUYER
+      );
+      expect(fromPaise(res.baseUnitPaise)).toBe(100);
+      expect(fromPaise(res.discountUnitPaise)).toBe(0);
+    });
+
+    it('preserves valid decimal cash discount (10.5%)', () => {
+      const res = computeLandedCost(
+        {
+          quoteId: 'q-cd-10.5',
+          supplier: testVendor,
+          quantity: 100,
+          rawRateRupees: 100,
+          rawUnit: 'pc',
+          creditDays: 0,
+          cashDiscountPct: 10.5,
+          gstPct: 18,
+        },
+        MH_REGULAR_BUYER
+      );
+      // Base: ₹100, Discount 10.5% => ₹10.50, Net Base: ₹89.50
+      expect(fromPaise(res.baseUnitPaise)).toBeCloseTo(89.5, 2);
+      expect(fromPaise(res.discountUnitPaise)).toBeCloseTo(10.5, 2);
+    });
+
+    it('preserves valid boundary 100% cash discount', () => {
+      const res = computeLandedCost(
+        {
+          quoteId: 'q-cd-100',
+          supplier: testVendor,
+          quantity: 100,
+          rawRateRupees: 100,
+          rawUnit: 'pc',
+          creditDays: 0,
+          cashDiscountPct: 100,
+          gstPct: 18,
+        },
+        MH_REGULAR_BUYER
+      );
+      expect(fromPaise(res.baseUnitPaise)).toBe(0);
+      expect(fromPaise(res.discountUnitPaise)).toBe(100);
+    });
+
+    it('rejects negative cash discount (-1%) with clear validation error', () => {
+      expect(() =>
+        computeLandedCost(
+          {
+            quoteId: 'q-cd-neg',
+            supplier: testVendor,
+            quantity: 100,
+            rawRateRupees: 100,
+            rawUnit: 'pc',
+            creditDays: 0,
+            cashDiscountPct: -1,
+            gstPct: 18,
+          },
+          MH_REGULAR_BUYER
+        )
+      ).toThrow(/Invalid cash discount percentage: -1/);
+    });
+
+    it('rejects cash discount exceeding 100% (100.01%) with clear validation error', () => {
+      expect(() =>
+        computeLandedCost(
+          {
+            quoteId: 'q-cd-over',
+            supplier: testVendor,
+            quantity: 100,
+            rawRateRupees: 100,
+            rawUnit: 'pc',
+            creditDays: 0,
+            cashDiscountPct: 100.01,
+            gstPct: 18,
+          },
+          MH_REGULAR_BUYER
+        )
+      ).toThrow(/Invalid cash discount percentage: 100.01/);
+    });
+
+    it('rejects NaN cash discount with clear validation error', () => {
+      expect(() =>
+        computeLandedCost(
+          {
+            quoteId: 'q-cd-nan',
+            supplier: testVendor,
+            quantity: 100,
+            rawRateRupees: 100,
+            rawUnit: 'pc',
+            creditDays: 0,
+            cashDiscountPct: NaN,
+            gstPct: 18,
+          },
+          MH_REGULAR_BUYER
+        )
+      ).toThrow(/Invalid cash discount percentage: NaN/);
+    });
+
+    it('rejects Infinity cash discount with clear validation error', () => {
+      expect(() =>
+        computeLandedCost(
+          {
+            quoteId: 'q-cd-inf',
+            supplier: testVendor,
+            quantity: 100,
+            rawRateRupees: 100,
+            rawUnit: 'pc',
+            creditDays: 0,
+            cashDiscountPct: Infinity,
+            gstPct: 18,
+          },
+          MH_REGULAR_BUYER
+        )
+      ).toThrow(/Invalid cash discount percentage: Infinity/);
+    });
   });
 });
 

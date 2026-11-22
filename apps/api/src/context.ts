@@ -37,6 +37,12 @@ export interface AppEnv {
   GROQ_WHISPER_MODEL?: string;
   RESEND_API_KEY?: string;
   RESEND_FROM_EMAIL?: string;
+  GMAIL_CLIENT_ID?: string;
+  GMAIL_CLIENT_SECRET?: string;
+  GMAIL_REFRESH_TOKEN?: string;
+  GMAIL_ACCESS_TOKEN?: string;
+  GMAIL_USER_EMAIL?: string;
+  GMAIL_REDIRECT_URI?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
   WHATSAPP_APP_SECRET?: string;
@@ -178,7 +184,7 @@ async function computeAuditEntryHash(entry: {
  * Records a tamper-evident, SHA-256 hash-chained audit trail entry scoped to the workspace.
  */
 export async function recordAuditLog(
-  db: KrayaDb,
+  db: KrayaDb | any,
   ctx: Pick<AuthContext, 'workspaceId' | 'email' | 'role'>,
   action: string,
   entityType: string,

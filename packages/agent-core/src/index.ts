@@ -7,6 +7,7 @@ export * from './groq-asr.js';
 export * from './elevenlabs.js';
 export * from './voicestudio.js';
 export * from './channels.js';
+export * from './gmail.js';
 export * from './local-parser.js';
 export * from './outreach.js';
 export * from './documents.js';

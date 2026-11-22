@@ -139,6 +139,18 @@ export function computeLandedCost(
   if (!Number.isFinite(input.rawRateRupees) || input.rawRateRupees < 0) {
     throw new Error(`Invalid quote unit rate: ${input.rawRateRupees}. Rate must be >= 0.`);
   }
+  if (input.cashDiscountPct !== undefined && input.cashDiscountPct !== null) {
+    if (
+      typeof input.cashDiscountPct !== 'number' ||
+      !Number.isFinite(input.cashDiscountPct) ||
+      input.cashDiscountPct < 0 ||
+      input.cashDiscountPct > 100
+    ) {
+      throw new Error(
+        `Invalid cash discount percentage: ${input.cashDiscountPct}. Must be a finite number between 0 and 100.`
+      );
+    }
+  }
   const qty = input.quantity;
   const flags: ComplianceFlag[] = [];
 

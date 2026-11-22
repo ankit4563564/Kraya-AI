@@ -4,11 +4,20 @@ import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { getDb, getDbMode } from './db/client.js';
+import { validateStartupEnv, printEnvValidationReport } from './env.js';
 
 // Load both local apps/api/.env and monorepo root .env cleanly
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 dotenv.config();
+
+// Enforce environment validation on startup (zero secret leakage)
+const envValidation = validateStartupEnv(process.env);
+printEnvValidationReport(envValidation);
+if (!envValidation.valid) {
+  console.error(`[Kraya API Startup Failed] Environment configuration invalid for tier "${envValidation.environment}". Aborting boot.`);
+  process.exit(1);
+}
 
 process.on('uncaughtException', (err) => {
   console.error('[Kraya API UncaughtException]', err?.message || err);

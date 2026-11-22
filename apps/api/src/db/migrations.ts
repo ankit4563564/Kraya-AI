@@ -651,6 +651,26 @@ CREATE INDEX IF NOT EXISTS idx_prs_ws_status ON purchase_requisitions(workspace_
 CREATE INDEX IF NOT EXISTS idx_perf_logs_ws_sup ON supplier_performance_logs(workspace_id, supplier_id, recorded_at DESC);
 `,
   },
+  {
+    version: '0008',
+    name: 'integration_health_and_diagnostics',
+    sql: `
+CREATE TABLE IF NOT EXISTS integration_health (
+  id TEXT PRIMARY KEY,
+  service_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL,
+  provider_mode TEXT NOT NULL,
+  last_tested_at TIMESTAMP,
+  last_success_at TIMESTAMP,
+  last_error TEXT,
+  latency_ms INTEGER,
+  details_json JSONB,
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_health_service ON integration_health(service_key);
+`,
+  },
 ];
 
 export function splitSqlStatements(sqlBlock: string): string[] {

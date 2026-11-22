@@ -30,13 +30,18 @@ function krayaApiWatchdogPlugin(): Plugin {
     if (await isApiHealthy()) return;
     starting = true;
     try {
-      const tsxBin = path.resolve(repoRoot, 'apps/api/node_modules/.bin/tsx');
+      const isWin = process.platform === 'win32';
+      const tsxBin = path.resolve(repoRoot, `apps/api/node_modules/.bin/${isWin ? 'tsx.cmd' : 'tsx'}`);
       const entry = path.resolve(repoRoot, 'apps/api/src/node-server.ts');
       apiChild = spawn(tsxBin, [entry], {
         cwd: repoRoot,
         stdio: 'ignore',
         detached: true,
+        shell: isWin,
         env: { ...process.env, PORT: '8787' },
+      });
+      apiChild.on('error', () => {
+        // gracefully ignore spawn errors
       });
       apiChild.unref();
       // Wait up to 4s for API to bind

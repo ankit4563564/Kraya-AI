@@ -40,6 +40,8 @@ import {
   parseWhatsAppCloudWebhook,
   sendViaResendEmail,
   sendViaWhatsAppCloudApi,
+  sendViaGmailApi,
+  searchGmailVendorMessages,
   synthesizeElevenLabsVoiceNote,
   synthesizeVoiceStudioVoiceNote,
   resolveVoiceStudioVoice,
@@ -106,6 +108,7 @@ import {
 import { registerBillingRoutes } from './routes-billing.js';
 import { registerNeonRoutes } from './routes-neon.js';
 import { registerEnterpriseRoutes } from './routes-enterprise.js';
+import { registerIntegrationRoutes } from './routes-integrations.js';
 
 export type { AppEnv };
 
@@ -153,6 +156,9 @@ const PUBLIC_PATHS = new Set([
   '/api/auth/forgot-password',
   '/api/auth/reset-password',
   '/api/auth/invitations/accept',
+  '/api/integrations/gmail/callback',
+  '/api/integrations/gmail/auth',
+  '/api/integrations/gmail/authorize',
 ]);
 
 const CA_ALLOWED_POST_PATHS = new Set([
@@ -170,6 +176,9 @@ const AUTH_RATE_LIMITED_PATHS = new Set([
   '/api/auth/forgot-password',
   '/api/auth/reset-password',
   '/api/auth/invitations/accept',
+  '/api/integrations/gmail/callback',
+  '/api/integrations/gmail/auth',
+  '/api/integrations/gmail/authorize',
 ]);
 
 export function createApp(envOverride?: Partial<AppEnv>) {
@@ -366,6 +375,7 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       reqPath.startsWith('/api/internal/cron/') ||
       reqPath.startsWith('/api/internal/n8n/') ||
       reqPath === '/api/connectors/n8n/callback' ||
+      reqPath.startsWith('/api/integrations/gmail/') ||
       (c.req.method === 'GET' && /^\/api\/auth\/invitations\/[^/]+$/.test(reqPath))
     ) {
       return next();
@@ -502,6 +512,7 @@ export function createApp(envOverride?: Partial<AppEnv>) {
   registerBillingRoutes(app, helpers);
   registerNeonRoutes(app, helpers);
   registerEnterpriseRoutes(app, helpers);
+  registerIntegrationRoutes(app, helpers);
 
   // Scoped media download & inline viewing endpoint (P1 local media vault fallback)
   app.get('/api/uploads/:key{.*}', async (c) => {
@@ -3434,7 +3445,7 @@ export function createApp(envOverride?: Partial<AppEnv>) {
     const ctx = c.get('auth');
     const db = await getDb(getEnv('DATABASE_URL'));
     const body = await c.req.json<{
-      channel: 'whatsapp_cloud_api' | 'resend_email';
+      channel: 'whatsapp_cloud_api' | 'resend_email' | 'gmail_api';
       explicitApprovalConfirmed: boolean;
       toPhone?: string;
       toEmail?: string;
@@ -3459,6 +3470,26 @@ export function createApp(envOverride?: Partial<AppEnv>) {
         bodyText: body.bodyText,
       });
       await recordAuditLog(db, ctx, 'live_send', 'whatsapp_cloud_api', receipt.providerMessageId, { toPhone: body.toPhone });
+      return c.json(receipt);
+    }
+
+    if (body.channel === 'gmail_api') {
+      const accessToken = getEnv('GMAIL_ACCESS_TOKEN');
+      const refreshToken = getEnv('GMAIL_REFRESH_TOKEN');
+      const clientId = getEnv('GMAIL_CLIENT_ID');
+      const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
+      const userEmail = getEnv('GMAIL_USER_EMAIL');
+
+      if (!accessToken && (!refreshToken || !clientId || !clientSecret)) {
+        return c.json({ error: 'Gmail API credentials not configured in .env.' }, 400);
+      }
+      const receipt = await sendViaGmailApi({
+        creds: { accessToken, refreshToken, clientId, clientSecret, userEmail },
+        toEmail: body.toEmail || '',
+        subject: body.subject || 'Procurement Message',
+        bodyText: body.bodyText,
+      });
+      await recordAuditLog(db, ctx, 'live_send', 'gmail_api', receipt.providerMessageId, { toEmail: body.toEmail });
       return c.json(receipt);
     }
 
@@ -4218,6 +4249,57 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       fileBuffer: null,
     });
     return c.json({ ok: true, attachmentsIngested: 0, ingested: result });
+  });
+
+  app.post('/api/webhooks/resend', async (c) => {
+    const payload = await c.req.json<{
+      type?: string;
+      created_at?: string;
+      data?: {
+        email_id?: string;
+        from?: string;
+        to?: string[];
+        subject?: string;
+      };
+    }>().catch(() => null);
+
+    if (!payload?.type) {
+      return c.json({ error: 'Invalid Resend webhook payload: missing event type.' }, 400);
+    }
+
+    return c.json({
+      ok: true,
+      received: true,
+      eventType: payload.type,
+      emailId: payload.data?.email_id || null,
+      processedAt: new Date().toISOString(),
+    });
+  });
+
+  app.post('/api/gmail/sync', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+
+    const accessToken = getEnv('GMAIL_ACCESS_TOKEN');
+    const refreshToken = getEnv('GMAIL_REFRESH_TOKEN');
+    const clientId = getEnv('GMAIL_CLIENT_ID');
+    const clientSecret = getEnv('GMAIL_CLIENT_SECRET');
+    const userEmail = getEnv('GMAIL_USER_EMAIL');
+
+    if (!accessToken && (!refreshToken || !clientId || !clientSecret)) {
+      return c.json({ error: 'Gmail API credentials not configured in .env.' }, 400);
+    }
+
+    const creds = { accessToken, refreshToken, clientId, clientSecret, userEmail };
+    const messages = await searchGmailVendorMessages({ creds, maxResults: 10 });
+
+    return c.json({
+      ok: true,
+      workspaceId: wsId,
+      foundVendorMessagesCount: messages.length,
+      messages,
+      syncedAt: new Date().toISOString(),
+    });
   });
 
   app.post('/api/webhooks/call-recording', async (c) => {

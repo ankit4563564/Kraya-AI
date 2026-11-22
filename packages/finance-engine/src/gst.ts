@@ -289,6 +289,23 @@ export function computeGstLine(params: {
   const itcRecoverablePaise = itc.recoverable ? Math.round(totalGstPaise * recoveryRatio) : 0;
   const nonRecoverableGstPaise = totalGstPaise - itcRecoverablePaise;
 
+  if (
+    params.itcRecoveryPct !== undefined &&
+    params.itcRecoveryPct < 100 &&
+    itc.recoverable &&
+    nonRecoverableGstPaise > 0
+  ) {
+    flags.push({
+      code: 'rule42_43_partial_itc',
+      severity: 'info',
+      title: `Rule 42/43 Partial ITC (${params.itcRecoveryPct}%) — ${formatINR(nonRecoverableGstPaise)} Added to Cost`,
+      detail: `Under Rule 42 & 43 of CGST Rules, business/exempt turnover apportionment restricts ITC to ${params.itcRecoveryPct}%. Non-creditable tax of ${formatINR(nonRecoverableGstPaise)} is added to landed cost.`,
+      impactPaise: nonRecoverableGstPaise,
+      statutoryRef: 'Rule 42 & 43 CGST Rules',
+      recommendedAction: 'Ensure monthly Rule 42/43 reversal ratio is reconciled with annual return (GSTR-9).',
+    });
+  }
+
   return {
     taxSplitType,
     taxablePaise,

@@ -47,6 +47,39 @@ function toSup(s: typeof schema.suppliers.$inferSelect): SupplierTaxProfile {
   };
 }
 
+class LifecycleError extends Error {
+  statusCode: number;
+  constructor(message: string, statusCode = 400) {
+    super(message);
+    this.name = 'LifecycleError';
+    this.statusCode = statusCode;
+  }
+}
+
+/**
+ * Concurrency mutex to serialize critical transactional mutations (PO amendments, GRN creation)
+ * on a per-PO level, eliminating race conditions while remaining non-blocking across distinct POs.
+ */
+const poConcurrencyQueues = new Map<string, Promise<unknown>>();
+
+export async function withPoLock<T>(poId: string, fn: () => Promise<T>): Promise<T> {
+  const current = poConcurrencyQueues.get(poId) ?? Promise.resolve();
+  const task = current
+    .catch(() => {})
+    .then(async () => {
+      return await fn();
+    });
+  const queuePromise = task
+    .catch(() => {})
+    .finally(() => {
+      if (poConcurrencyQueues.get(poId) === queuePromise) {
+        poConcurrencyQueues.delete(poId);
+      }
+    });
+  poConcurrencyQueues.set(poId, queuePromise);
+  return task;
+}
+
 export function registerLifecycleRoutes(
   app: Hono<{ Variables: AppVariables }>,
   helpers: AppHelpers
@@ -119,6 +152,7 @@ export function registerLifecycleRoutes(
       freightRupees?: number;
       paymentTermsDays?: number;
       deliveryDueAt?: string;
+      expectedRevision?: number;
       reason: string;
     }>();
 
@@ -127,166 +161,201 @@ export function registerLifecycleRoutes(
       return c.json({ error: 'Amendment reason is required for PO revision audit trail.' }, 400);
     }
 
-    const db = await getDb(helpers.getEnv('DATABASE_URL'));
-    const [po] = await db
-      .select()
-      .from(schema.purchaseOrders)
-      .where(and(eq(schema.purchaseOrders.id, id), eq(schema.purchaseOrders.workspaceId, ctx.workspaceId)))
-      .limit(1);
-
-    if (!po) return c.json({ error: 'Purchase Order not found in this workspace.' }, 404);
-    if (po.invoiceStatus === 'cancelled') {
-      return c.json({ error: `Cancelled PO ${po.poNumber} cannot be amended.` }, 400);
-    }
-
-    const [[ws], [sup]] = await Promise.all([
-      db.select().from(schema.workspaces).where(eq(schema.workspaces.id, ctx.workspaceId)).limit(1),
-      db
-        .select()
-        .from(schema.suppliers)
-        .where(and(eq(schema.suppliers.id, po.supplierId), eq(schema.suppliers.workspaceId, ctx.workspaceId)))
-        .limit(1),
-    ]);
-    if (!ws || !sup) return c.json({ error: 'Workspace or supplier missing.' }, 404);
-
-    const prevItems = po.itemsJson as Array<{
-      itemKey: string;
-      description: string;
-      hsnSac?: string | null;
-      qty: number;
-      unit: string;
-      unitRatePaise: number;
-      gstPct: number;
-      taxablePaise: number;
-    }>;
-    const first = prevItems[0];
-    if (!first) return c.json({ error: 'PO has no line items to amend.' }, 400);
-
-    const nextQty = typeof body.qty === 'number' ? body.qty : first.qty;
-    const nextUnitRatePaise =
-      typeof body.unitRateRupees === 'number' ? toPaise(body.unitRateRupees) : first.unitRatePaise;
-    const nextGstPct = typeof body.gstPct === 'number' ? body.gstPct : first.gstPct;
-    const nextFreightPaise =
-      typeof body.freightRupees === 'number' ? toPaise(body.freightRupees) : po.freightPaise;
-    const nextPaymentTerms =
-      typeof body.paymentTermsDays === 'number' ? body.paymentTermsDays : po.paymentTermsDays;
-    const nextDeliveryDueAt = body.deliveryDueAt || po.deliveryDueAt;
-
-    if (!Number.isFinite(nextQty) || nextQty <= 0 || nextUnitRatePaise < 0) {
-      return c.json({ error: 'Amended quantity must be > 0 and unit rate >= 0.' }, 400);
-    }
-
-    const goodsTaxablePaise = Math.round(nextUnitRatePaise * nextQty);
-    const totalTaxablePaise = goodsTaxablePaise + nextFreightPaise;
-    const buyer = toBuyer(ws);
-    const gstCalc = computeGstLine({
-      taxablePaise: totalTaxablePaise,
-      gstRatePct: nextGstPct,
-      buyer,
-      supplier: toSup(sup),
-      hsnOrItemText: first.hsnSac || first.description,
-    });
-
-    const newItems = [
-      {
-        ...first,
-        qty: nextQty,
-        unitRatePaise: nextUnitRatePaise,
-        gstPct: nextGstPct,
-        taxablePaise: goodsTaxablePaise,
-      },
-      ...prevItems.slice(1),
-    ];
-
-    const nextRevision = (po.revisionNumber || 1) + 1;
-    const priorRevisions = Array.isArray(po.revisionsJson) ? po.revisionsJson : [];
-    const snapshot = {
-      revisionNumber: po.revisionNumber || 1,
-      itemsJson: po.itemsJson,
-      freightPaise: po.freightPaise,
-      taxablePaise: po.taxablePaise,
-      totalPaise: po.totalPaise,
-      paymentTermsDays: po.paymentTermsDays,
-      deliveryDueAt: po.deliveryDueAt,
-      amendedAt: new Date().toISOString(),
-      amendedBy: ctx.email,
-      reason,
-    };
-
-    const nextPaymentDueAt = addCalendarDays(nextDeliveryDueAt, nextPaymentTerms);
-
-    // Regenerate & retain amended PO PDF in persistent vault
-    let pdfFileId = po.pdfFileId;
     try {
-      const pdfBytes = await generateGstPoPdf({
-        poNumber: `${po.poNumber}-Rev${nextRevision}`,
-        poDate: todayIso(),
-        deliveryDueDate: nextDeliveryDueAt,
-        paymentTermsDays: nextPaymentTerms,
-        buyer,
-        supplier: {
-          name: sup.name,
-          gstin: sup.gstin,
-          stateCode: sup.stateCode,
-          phone: sup.phone,
-          email: sup.email,
-          udyamTier: sup.udyamTier,
-        },
-        items: newItems,
-        freightPaise: nextFreightPaise,
-        taxableTotalPaise: totalTaxablePaise,
-        cgstPaise: gstCalc.cgstPaise,
-        sgstPaise: gstCalc.sgstPaise,
-        igstPaise: gstCalc.igstPaise,
-        grandTotalPaise: gstCalc.grandTotalPaise,
+      const db = await getDb(helpers.getEnv('DATABASE_URL'));
+      const updated = await withPoLock(id, async () => {
+        return await db.transaction(async (tx) => {
+          const [po] = await tx
+            .select()
+            .from(schema.purchaseOrders)
+            .where(and(eq(schema.purchaseOrders.id, id), eq(schema.purchaseOrders.workspaceId, ctx.workspaceId)))
+            .limit(1);
+
+          if (!po) throw new LifecycleError('Purchase Order not found in this workspace.', 404);
+          if (po.invoiceStatus === 'cancelled') {
+            throw new LifecycleError(`Cancelled PO ${po.poNumber} cannot be amended.`, 400);
+          }
+
+          const currentRevision = po.revisionNumber || 1;
+          if (typeof body.expectedRevision === 'number' && body.expectedRevision !== currentRevision) {
+            throw new LifecycleError(
+              `Conflict: Purchase Order is at revision ${currentRevision}, but expected revision was ${body.expectedRevision}.`,
+              409
+            );
+          }
+
+          const [[ws], [sup]] = await Promise.all([
+            tx.select().from(schema.workspaces).where(eq(schema.workspaces.id, ctx.workspaceId)).limit(1),
+            tx
+              .select()
+              .from(schema.suppliers)
+              .where(and(eq(schema.suppliers.id, po.supplierId), eq(schema.suppliers.workspaceId, ctx.workspaceId)))
+              .limit(1),
+          ]);
+          if (!ws || !sup) throw new LifecycleError('Workspace or supplier missing.', 404);
+
+          const prevItems = po.itemsJson as Array<{
+            itemKey: string;
+            description: string;
+            hsnSac?: string | null;
+            qty: number;
+            unit: string;
+            unitRatePaise: number;
+            gstPct: number;
+            taxablePaise: number;
+          }>;
+          const first = prevItems[0];
+          if (!first) throw new LifecycleError('PO has no line items to amend.', 400);
+
+          const nextQty = typeof body.qty === 'number' ? body.qty : first.qty;
+          const nextUnitRatePaise =
+            typeof body.unitRateRupees === 'number' ? toPaise(body.unitRateRupees) : first.unitRatePaise;
+          const nextGstPct = typeof body.gstPct === 'number' ? body.gstPct : first.gstPct;
+          const nextFreightPaise =
+            typeof body.freightRupees === 'number' ? toPaise(body.freightRupees) : po.freightPaise;
+          const nextPaymentTerms =
+            typeof body.paymentTermsDays === 'number' ? body.paymentTermsDays : po.paymentTermsDays;
+          const nextDeliveryDueAt = body.deliveryDueAt || po.deliveryDueAt;
+
+          if (!Number.isFinite(nextQty) || nextQty <= 0 || nextUnitRatePaise < 0) {
+            throw new LifecycleError('Amended quantity must be > 0 and unit rate >= 0.', 400);
+          }
+
+          const goodsTaxablePaise = Math.round(nextUnitRatePaise * nextQty);
+          const totalTaxablePaise = goodsTaxablePaise + nextFreightPaise;
+          const buyer = toBuyer(ws);
+          const gstCalc = computeGstLine({
+            taxablePaise: totalTaxablePaise,
+            gstRatePct: nextGstPct,
+            buyer,
+            supplier: toSup(sup),
+            hsnOrItemText: first.hsnSac || first.description,
+          });
+
+          const newItems = [
+            {
+              ...first,
+              qty: nextQty,
+              unitRatePaise: nextUnitRatePaise,
+              gstPct: nextGstPct,
+              taxablePaise: goodsTaxablePaise,
+            },
+            ...prevItems.slice(1),
+          ];
+
+          const nextRevision = currentRevision + 1;
+          const priorRevisions = Array.isArray(po.revisionsJson) ? po.revisionsJson : [];
+          const snapshot = {
+            revisionNumber: currentRevision,
+            itemsJson: po.itemsJson,
+            freightPaise: po.freightPaise,
+            taxablePaise: po.taxablePaise,
+            totalPaise: po.totalPaise,
+            paymentTermsDays: po.paymentTermsDays,
+            deliveryDueAt: po.deliveryDueAt,
+            amendedAt: new Date().toISOString(),
+            amendedBy: ctx.email,
+            reason,
+          };
+
+          const nextPaymentDueAt = addCalendarDays(nextDeliveryDueAt, nextPaymentTerms);
+
+          // Regenerate & retain amended PO PDF in persistent vault
+          let pdfFileId = po.pdfFileId;
+          try {
+            const pdfBytes = await generateGstPoPdf({
+              poNumber: `${po.poNumber}-Rev${nextRevision}`,
+              poDate: todayIso(),
+              deliveryDueDate: nextDeliveryDueAt,
+              paymentTermsDays: nextPaymentTerms,
+              buyer,
+              supplier: {
+                name: sup.name,
+                gstin: sup.gstin,
+                stateCode: sup.stateCode,
+                phone: sup.phone,
+                email: sup.email,
+                udyamTier: sup.udyamTier,
+              },
+              items: newItems,
+              freightPaise: nextFreightPaise,
+              taxableTotalPaise: totalTaxablePaise,
+              cgstPaise: gstCalc.cgstPaise,
+              sgstPaise: gstCalc.sgstPaise,
+              igstPaise: gstCalc.igstPaise,
+              grandTotalPaise: gstCalc.grandTotalPaise,
+            });
+            const storedPdf = await persistWorkspaceFile({
+              db: tx,
+              storage: helpers.getStorage(),
+              workspaceId: ctx.workspaceId,
+              uploadedByUserId: ctx.userId,
+              fileName: `${po.poNumber}-Rev${nextRevision}.pdf`,
+              mimeType: 'application/pdf',
+              bytes: new Uint8Array(pdfBytes),
+              category: 'po_pdf',
+              poId: po.id,
+            });
+            pdfFileId = storedPdf.id;
+          } catch {
+            // Non-fatal
+          }
+
+          // Atomic conditional update ensuring optimistic concurrency protection
+          const [updatedRow] = await tx
+            .update(schema.purchaseOrders)
+            .set({
+              revisionNumber: nextRevision,
+              itemsJson: newItems,
+              freightPaise: nextFreightPaise,
+              taxablePaise: totalTaxablePaise,
+              cgstPaise: gstCalc.cgstPaise,
+              sgstPaise: gstCalc.sgstPaise,
+              igstPaise: gstCalc.igstPaise,
+              totalPaise: gstCalc.grandTotalPaise,
+              paymentTermsDays: nextPaymentTerms,
+              deliveryDueAt: nextDeliveryDueAt,
+              paymentDueAt: nextPaymentDueAt,
+              pdfFileId,
+              revisionsJson: [...priorRevisions, snapshot],
+            })
+            .where(
+              and(
+                eq(schema.purchaseOrders.id, id),
+                eq(schema.purchaseOrders.workspaceId, ctx.workspaceId),
+                eq(schema.purchaseOrders.revisionNumber, currentRevision)
+              )
+            )
+            .returning();
+
+          if (!updatedRow) {
+            throw new LifecycleError(
+              `Conflict: Purchase Order ${po.poNumber} was concurrently modified. Revision ${currentRevision} is no longer current.`,
+              409
+            );
+          }
+
+          await recordAuditLog(tx, ctx, 'po_amended', 'purchase_order', po.id, {
+            poNumber: po.poNumber,
+            previousRevision: currentRevision,
+            newRevision: nextRevision,
+            previousTotalPaise: po.totalPaise,
+            newTotalPaise: updatedRow.totalPaise,
+            reason,
+            pdfFileId,
+          });
+
+          return updatedRow;
+        });
       });
-      const storedPdf = await persistWorkspaceFile({
-        db,
-        storage: helpers.getStorage(),
-        workspaceId: ctx.workspaceId,
-        uploadedByUserId: ctx.userId,
-        fileName: `${po.poNumber}-Rev${nextRevision}.pdf`,
-        mimeType: 'application/pdf',
-        bytes: new Uint8Array(pdfBytes),
-        category: 'po_pdf',
-        poId: po.id,
-      });
-      pdfFileId = storedPdf.id;
-    } catch {
-      // Non-fatal
+
+      return c.json(updated);
+    } catch (err: any) {
+      if (err instanceof LifecycleError) {
+        return c.json({ error: err.message }, err.statusCode as any);
+      }
+      return c.json({ error: err?.message || 'Failed to amend Purchase Order.' }, 500);
     }
-
-    const [updated] = await db
-      .update(schema.purchaseOrders)
-      .set({
-        revisionNumber: nextRevision,
-        itemsJson: newItems,
-        freightPaise: nextFreightPaise,
-        taxablePaise: totalTaxablePaise,
-        cgstPaise: gstCalc.cgstPaise,
-        sgstPaise: gstCalc.sgstPaise,
-        igstPaise: gstCalc.igstPaise,
-        totalPaise: gstCalc.grandTotalPaise,
-        paymentTermsDays: nextPaymentTerms,
-        deliveryDueAt: nextDeliveryDueAt,
-        paymentDueAt: nextPaymentDueAt,
-        pdfFileId,
-        revisionsJson: [...priorRevisions, snapshot],
-      })
-      .where(and(eq(schema.purchaseOrders.id, id), eq(schema.purchaseOrders.workspaceId, ctx.workspaceId)))
-      .returning();
-
-    await recordAuditLog(db, ctx, 'po_amended', 'purchase_order', po.id, {
-      poNumber: po.poNumber,
-      previousRevision: po.revisionNumber,
-      newRevision: nextRevision,
-      previousTotalPaise: po.totalPaise,
-      newTotalPaise: updated.totalPaise,
-      reason,
-      pdfFileId,
-    });
-
-    return c.json(updated);
   });
 
   // =========================================================================
@@ -310,7 +379,6 @@ export function registerLifecycleRoutes(
 
   app.post('/api/grns', async (c) => {
     const ctx = c.get('auth');
-    const db = await getDb(helpers.getEnv('DATABASE_URL'));
     const body = await c.req.json<{
       poId: string;
       challanNumber?: string;
@@ -330,108 +398,166 @@ export function registerLifecycleRoutes(
       return c.json({ error: 'poId and at least one received line item are required.' }, 400);
     }
 
-    const [po] = await db
-      .select()
-      .from(schema.purchaseOrders)
-      .where(and(eq(schema.purchaseOrders.id, body.poId), eq(schema.purchaseOrders.workspaceId, ctx.workspaceId)))
-      .limit(1);
+    try {
+      const db = await getDb(helpers.getEnv('DATABASE_URL'));
+      const result = await withPoLock(body.poId, async () => {
+        return await db.transaction(async (tx) => {
+          const [po] = await tx
+            .select()
+            .from(schema.purchaseOrders)
+            .where(and(eq(schema.purchaseOrders.id, body.poId), eq(schema.purchaseOrders.workspaceId, ctx.workspaceId)))
+            .limit(1);
 
-    if (!po) return c.json({ error: 'Purchase Order not found in this workspace.' }, 404);
-    if (po.invoiceStatus === 'cancelled') {
-      return c.json({ error: `Cannot record GRN against cancelled PO ${po.poNumber}.` }, 400);
-    }
+          if (!po) throw new LifecycleError('Purchase Order not found in this workspace.', 404);
+          if (po.invoiceStatus === 'cancelled') {
+            throw new LifecycleError(`Cannot record GRN against cancelled PO ${po.poNumber}.`, 400);
+          }
 
-    const poItems = po.itemsJson as Array<{ itemKey: string; description: string; qty: number }>;
-    const normalizedItems = body.items.map((it, idx) => {
-      const ref = poItems.find((p) => p.itemKey === it.itemKey) || poItems[idx] || poItems[0];
-      const receivedQty = Number(it.receivedQty);
-      const acceptedQty = Number(it.acceptedQty);
-      const rejectedQty =
-        typeof it.rejectedQty === 'number' ? Number(it.rejectedQty) : Math.max(0, receivedQty - acceptedQty);
-      if (
-        !Number.isFinite(receivedQty) ||
-        receivedQty <= 0 ||
-        !Number.isFinite(acceptedQty) ||
-        acceptedQty < 0 ||
-        !Number.isFinite(rejectedQty) ||
-        rejectedQty < 0 ||
-        acceptedQty + rejectedQty > receivedQty + 0.0001
-      ) {
-        throw new Error('Invalid GRN quantities: acceptedQty + rejectedQty cannot exceed receivedQty.');
+          const poItems = po.itemsJson as Array<{ itemKey: string; description: string; qty: number }>;
+          const normalizedItems = [];
+          for (let idx = 0; idx < body.items.length; idx++) {
+            const it = body.items[idx];
+            const ref = poItems.find((p) => p.itemKey === it.itemKey) || poItems[idx] || poItems[0];
+            const receivedQty = Number(it.receivedQty);
+            const acceptedQty = Number(it.acceptedQty);
+            const rejectedQty =
+              typeof it.rejectedQty === 'number' ? Number(it.rejectedQty) : Math.max(0, receivedQty - acceptedQty);
+            if (
+              !Number.isFinite(receivedQty) ||
+              receivedQty <= 0 ||
+              !Number.isFinite(acceptedQty) ||
+              acceptedQty < 0 ||
+              !Number.isFinite(rejectedQty) ||
+              rejectedQty < 0 ||
+              acceptedQty + rejectedQty > receivedQty + 0.0001
+            ) {
+              throw new LifecycleError(
+                'Invalid GRN quantities: acceptedQty + rejectedQty cannot exceed receivedQty, and receivedQty must be > 0.',
+                400
+              );
+            }
+            normalizedItems.push({
+              itemKey: ref?.itemKey || it.itemKey || 'item',
+              description: ref?.description || it.description || 'Received Goods',
+              orderedQty: ref?.qty ?? 0,
+              receivedQty,
+              acceptedQty,
+              rejectedQty,
+            });
+          }
+
+          // Query existing GRNs for this PO within the active transaction
+          const poPriorGrns = await tx
+            .select()
+            .from(schema.grnReceipts)
+            .where(
+              and(
+                eq(schema.grnReceipts.workspaceId, ctx.workspaceId),
+                eq(schema.grnReceipts.poId, po.id)
+              )
+            );
+
+          // Calculate prior accepted quantities per itemKey
+          const priorAcceptedByItem = new Map<string, number>();
+          for (const g of poPriorGrns) {
+            const gItems = (g.itemsJson as Array<{ itemKey?: string; acceptedQty?: number }>) || [];
+            for (const gi of gItems) {
+              const k = gi.itemKey || 'item';
+              priorAcceptedByItem.set(k, (priorAcceptedByItem.get(k) || 0) + (Number(gi.acceptedQty) || 0));
+            }
+          }
+
+          // Ensure concurrent or partial GRN submissions cannot exceed ordered PO quantities
+          for (const it of normalizedItems) {
+            const alreadyAccepted = priorAcceptedByItem.get(it.itemKey) || 0;
+            const newCumulative = alreadyAccepted + it.acceptedQty;
+            if (it.orderedQty > 0 && newCumulative > it.orderedQty + 0.0001) {
+              const remaining = Math.max(0, it.orderedQty - alreadyAccepted);
+              throw new LifecycleError(
+                `GRN accepted quantity exceeds ordered PO quantity for item '${it.description}'. Ordered: ${it.orderedQty}, already accepted: ${alreadyAccepted}, attempted: ${it.acceptedQty}. Maximum remaining deliverable: ${remaining}.`,
+                400
+              );
+            }
+          }
+
+          const totalOrdered = poItems.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+          const totalAlreadyAccepted = Array.from(priorAcceptedByItem.values()).reduce((s, v) => s + v, 0);
+          const incomingAcceptedTotal = normalizedItems.reduce((s, i) => s + i.acceptedQty, 0);
+          if (totalOrdered > 0 && totalAlreadyAccepted + incomingAcceptedTotal > totalOrdered + 0.0001) {
+            const remainingTotal = Math.max(0, totalOrdered - totalAlreadyAccepted);
+            throw new LifecycleError(
+              `Total GRN accepted quantity exceeds PO ordered quantity. Ordered: ${totalOrdered}, already accepted: ${totalAlreadyAccepted}, attempted: ${incomingAcceptedTotal}. Maximum remaining deliverable: ${remainingTotal}.`,
+              400
+            );
+          }
+
+          const totalAccepted = normalizedItems.reduce((s, i) => s + i.acceptedQty, 0);
+          const totalRejected = normalizedItems.reduce((s, i) => s + i.rejectedQty, 0);
+          const qcStatus =
+            totalAccepted === 0 ? 'rejected' : totalRejected > 0 ? 'partial' : 'accepted';
+
+          const existingWsGrns = await tx
+            .select({ id: schema.grnReceipts.id })
+            .from(schema.grnReceipts)
+            .where(eq(schema.grnReceipts.workspaceId, ctx.workspaceId));
+          const grnNumber = `GRN-${new Date().getFullYear()}-${String(existingWsGrns.length + 1).padStart(4, '0')}`;
+          const receivedDate = body.receivedDate || todayIso();
+          const acceptedDate = body.acceptedDate || receivedDate;
+
+          const [created] = await tx
+            .insert(schema.grnReceipts)
+            .values({
+              id: uid('grn'),
+              workspaceId: ctx.workspaceId,
+              poId: po.id,
+              supplierId: po.supplierId,
+              grnNumber,
+              challanNumber: body.challanNumber?.trim() || null,
+              receivedDate,
+              acceptedDate,
+              itemsJson: normalizedItems,
+              qcStatus,
+              notes: body.notes?.trim() || null,
+              createdBy: ctx.email,
+            })
+            .returning();
+
+          const cumulativeAcceptedQty = totalAlreadyAccepted + totalAccepted;
+          const remainingQty = Math.max(0, totalOrdered - cumulativeAcceptedQty);
+          const fulfillmentPct =
+            totalOrdered > 0 ? Math.min(100, Math.round((cumulativeAcceptedQty / totalOrdered) * 1000) / 10) : 0;
+
+          await recordAuditLog(tx, ctx, 'grn_recorded', 'grn_receipt', created.id, {
+            grnNumber,
+            poId: po.id,
+            poNumber: po.poNumber,
+            challanNumber: created.challanNumber,
+            acceptedDate,
+            acceptedQty: totalAccepted,
+            rejectedQty: totalRejected,
+            cumulativeAcceptedQty,
+            orderedQty: totalOrdered,
+          });
+
+          return {
+            grn: created,
+            poFulfillment: {
+              orderedQty: totalOrdered,
+              cumulativeAcceptedQty,
+              remainingQty,
+              fulfillmentPct,
+            },
+          };
+        });
+      });
+
+      return c.json(result, 201);
+    } catch (err: any) {
+      if (err instanceof LifecycleError) {
+        return c.json({ error: err.message }, err.statusCode as any);
       }
-      return {
-        itemKey: ref?.itemKey || it.itemKey || 'item',
-        description: ref?.description || it.description || 'Received Goods',
-        orderedQty: ref?.qty ?? 0,
-        receivedQty,
-        acceptedQty,
-        rejectedQty,
-      };
-    });
-
-    const totalAccepted = normalizedItems.reduce((s, i) => s + i.acceptedQty, 0);
-    const totalRejected = normalizedItems.reduce((s, i) => s + i.rejectedQty, 0);
-    const qcStatus =
-      totalAccepted === 0 ? 'rejected' : totalRejected > 0 ? 'partial' : 'accepted';
-
-    const existingGrns = await db
-      .select()
-      .from(schema.grnReceipts)
-      .where(eq(schema.grnReceipts.workspaceId, ctx.workspaceId));
-    const grnNumber = `GRN-${new Date().getFullYear()}-${String(existingGrns.length + 1).padStart(4, '0')}`;
-    const receivedDate = body.receivedDate || todayIso();
-    const acceptedDate = body.acceptedDate || receivedDate;
-
-    const [created] = await db
-      .insert(schema.grnReceipts)
-      .values({
-        id: uid('grn'),
-        workspaceId: ctx.workspaceId,
-        poId: po.id,
-        supplierId: po.supplierId,
-        grnNumber,
-        challanNumber: body.challanNumber?.trim() || null,
-        receivedDate,
-        acceptedDate,
-        itemsJson: normalizedItems,
-        qcStatus,
-        notes: body.notes?.trim() || null,
-        createdBy: ctx.email,
-      })
-      .returning();
-
-    // Calculate cumulative accepted qty across all GRNs on this PO
-    const poGrns = existingGrns.filter((g) => g.poId === po.id).concat([created]);
-    const cumulativeAcceptedQty = poGrns.reduce((sum, g) => {
-      const items = (g.itemsJson as Array<{ acceptedQty: number }>) || [];
-      return sum + items.reduce((s, x) => s + (x.acceptedQty || 0), 0);
-    }, 0);
-    const orderedQty = poItems.reduce((s, i) => s + i.qty, 0);
-
-    await recordAuditLog(db, ctx, 'grn_recorded', 'grn_receipt', created.id, {
-      grnNumber,
-      poId: po.id,
-      poNumber: po.poNumber,
-      challanNumber: created.challanNumber,
-      acceptedDate,
-      acceptedQty: totalAccepted,
-      rejectedQty: totalRejected,
-      cumulativeAcceptedQty,
-      orderedQty,
-    });
-
-    return c.json(
-      {
-        grn: created,
-        poFulfillment: {
-          orderedQty,
-          cumulativeAcceptedQty,
-          remainingQty: Math.max(0, orderedQty - cumulativeAcceptedQty),
-          fulfillmentPct: orderedQty > 0 ? Math.min(100, Math.round((cumulativeAcceptedQty / orderedQty) * 1000) / 10) : 0,
-        },
-      },
-      201
-    );
+      return c.json({ error: err?.message || 'Failed to record GRN.' }, 500);
+    }
   });
 
   // =========================================================================

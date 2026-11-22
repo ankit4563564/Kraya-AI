@@ -1,25 +1,77 @@
 import React, { useEffect, useState } from 'react';
 import {
   Plug,
-  Download,
-  Send,
-  Trash2,
   CheckCircle2,
   AlertTriangle,
   RefreshCw,
-  Building2,
-  ShieldCheck,
+  XCircle,
+  Clock,
+  Key,
+  Database,
+  HardDrive,
+  Sparkles,
+  MessageSquare,
+  Mail,
+  Mic,
+  Volume2,
+  CreditCard,
+  FileSpreadsheet,
+  BookOpen,
+  ShieldAlert,
+  ChevronDown,
+  ChevronUp,
+  Terminal,
+  Play,
+  Check,
+  Copy,
+  Info,
 } from 'lucide-react';
-import { API_BASE, apiJson } from '../lib/api';
+import { apiJson } from '../lib/api';
 import { ModalDialog } from './ModalDialog';
 
-interface ConnectorEntry {
+export type IntegrationStatus =
+  | 'CONNECTED'
+  | 'DEGRADED'
+  | 'FALLBACK_ACTIVE'
+  | 'NOT_CONFIGURED'
+  | 'ERROR'
+  | 'UNVERIFIED';
+
+export interface IntegrationCard {
   id: string;
   name: string;
-  category: string;
-  status: string;
-  envVars: string[];
-  description: string;
+  category: 'Database' | 'Storage' | 'Intelligence' | 'Messaging' | 'Voice' | 'ERP & Banking' | 'Compliance';
+  icon: string;
+  status: IntegrationStatus;
+  providerMode: string;
+  isConfigured: boolean;
+  requiredEnvVars: string[];
+  optionalEnvVars: string[];
+  missingEnvVars: string[];
+  lastTestedAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  latencyMs: number | null;
+  supportedOperations: string[];
+  details: Record<string, unknown>;
+  setupGuide: {
+    description: string;
+    docsUrl?: string;
+    sampleEnv: string;
+  };
+}
+
+export interface IntegrationsResponse {
+  ok: boolean;
+  summary: {
+    total: number;
+    connected: number;
+    fallbackActive: number;
+    notConfigured: number;
+    unverified: number;
+    error: number;
+  };
+  integrations: IntegrationCard[];
 }
 
 interface WebhookEntry {
@@ -43,426 +95,483 @@ interface DeliveryEntry {
   createdAt: string;
 }
 
-interface N8nTemplateEntry {
-  slug: string;
-  title: string;
-  description: string;
-  triggers: string[];
-  requiredCredentials: string[];
-  downloadPath: string;
-}
-
-interface CatalogResponse {
-  connectors: ConnectorEntry[];
-  webhooks: WebhookEntry[];
-  recentDeliveries: DeliveryEntry[];
-  n8nTemplates: N8nTemplateEntry[];
-}
-
-interface LiveN8nStatus {
-  connected: boolean;
-  baseUrl: string | null;
-  defaultWebhookUrl?: string | null;
-  workflows: Array<{
-    id: string;
-    name: string;
-    active: boolean;
-    editorUrl: string;
-  }>;
-  recentExecutions: Array<{
-    id: string;
-    workflowId: string;
-    status: string;
-    finished: boolean;
-    startedAt: string | null;
-  }>;
-}
-
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
 export function ConnectorHubModal({ open, onClose }: Props) {
-  const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
-  const [liveN8n, setLiveN8n] = useState<LiveN8nStatus | null>(null);
+  const [activeTab, setActiveTab] = useState<'control_center' | 'webhooks_n8n'>('control_center');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [data, setData] = useState<IntegrationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [testingService, setTestingService] = useState<string | null>(null);
+  const [testingAll, setTestingAll] = useState(false);
+  const [expandedSetup, setExpandedSetup] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // New n8n webhook form
+  // n8n webhooks
+  const [webhooks, setWebhooks] = useState<WebhookEntry[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryEntry[]>([]);
   const [whName, setWhName] = useState('n8n Procurement Bus');
   const [whProvider, setWhProvider] = useState('n8n');
   const [whUrl, setWhUrl] = useState('');
   const [whSecret, setWhSecret] = useState('');
 
-  // Quick Udyam & IFSC Live Checkers
-  const [udyamInput, setUdyamInput] = useState('');
-  const [udyamRes, setUdyamRes] = useState<{ formatValid: boolean; note: string; officialPortalUrl: string } | null>(null);
-  const [ifscInput, setIfscInput] = useState('');
-  const [ifscRes, setIfscRes] = useState<{ valid: boolean; bank: string | null; branch: string | null; city: string | null; neft: boolean; rtgs: boolean } | null>(null);
-
-  const load = async () => {
+  const loadIntegrations = async () => {
     setLoading(true);
-    setError(null);
     try {
-      const [data, n8nData] = await Promise.all([
-        apiJson<CatalogResponse>('/api/connectors/catalog'),
-        apiJson<LiveN8nStatus>('/api/connectors/n8n/live-workflows').catch(() => null),
-      ]);
-      setCatalog(data);
-      setLiveN8n(n8nData);
+      const res = await apiJson<IntegrationsResponse>('/api/integrations');
+      setData(res);
+
+      // Load webhooks catalog in parallel
+      apiJson<{ webhooks: WebhookEntry[]; recentDeliveries: DeliveryEntry[] }>('/api/connectors/catalog')
+        .then((cat) => {
+          setWebhooks(cat.webhooks || []);
+          setDeliveries(cat.recentDeliveries || []);
+        })
+        .catch(() => {});
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load Connector Hub');
+      setToastMsg(`Error loading integrations: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (open) load();
+    if (open) {
+      loadIntegrations();
+    }
   }, [open]);
 
-  const handleAddWebhook = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setNotice(null);
-    try {
-      await apiJson('/api/connectors/webhooks', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: whName,
-          provider: whProvider,
-          targetUrl: whUrl,
-          signingSecret: whSecret || undefined,
-          subscribedEvents: ['*'],
-        }),
-      });
-      setWhUrl('');
-      setWhSecret('');
-      setNotice('Webhook registered! Click "Test Event" to fire a signed HMAC-SHA256 payload.');
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add webhook');
-    }
-  };
-
-  const handleTestWebhook = async (id: string) => {
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await apiJson<{ ok: boolean; httpStatus: number; durationMs: number; responsePreview: string }>(
-        `/api/connectors/webhooks/${id}/test`,
-        { method: 'POST' }
-      );
-      setNotice(
-        res.ok
-          ? `Test event delivered (HTTP ${res.httpStatus} in ${res.durationMs}ms).`
-          : `Test delivery returned HTTP ${res.httpStatus}: ${res.responsePreview}`
-      );
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Test dispatch failed');
-    }
-  };
-
-  const handleDeleteWebhook = async (id: string) => {
-    await apiJson(`/api/connectors/webhooks/${id}`, { method: 'DELETE' }).catch(() => {});
-    load();
-  };
-
-  const handleVerifyUdyam = async () => {
-    if (!udyamInput.trim()) return;
-    setError(null);
-    try {
-      const res = await apiJson<{ formatValid: boolean; note: string; officialPortalUrl: string }>(
-        '/api/connectors/verify-udyam',
-        {
-          method: 'POST',
-          body: JSON.stringify({ udyamNumber: udyamInput.trim() }),
-        }
-      );
-      setUdyamRes(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Udyam check failed');
-    }
-  };
-
-  const handleVerifyIfsc = async () => {
-    if (!ifscInput.trim()) return;
-    setError(null);
+  const testSingleIntegration = async (serviceId: string) => {
+    setTestingService(serviceId);
     try {
       const res = await apiJson<{
-        valid: boolean;
-        bank: string | null;
-        branch: string | null;
-        city: string | null;
-        neft: boolean;
-        rtgs: boolean;
-      }>(`/api/connectors/ifsc/${encodeURIComponent(ifscInput.trim().toUpperCase())}`);
-      setIfscRes(res);
+        ok: boolean;
+        service: string;
+        status: IntegrationStatus;
+        latencyMs: number;
+        lastError: string | null;
+      }>(`/api/integrations/test/${serviceId}`, { method: 'POST' });
+
+      setToastMsg(
+        res.ok
+          ? `✓ ${serviceId.toUpperCase()} test succeeded (${res.latencyMs}ms)`
+          : `✗ ${serviceId.toUpperCase()} test failed: ${res.lastError || 'Unknown error'}`
+      );
+      loadIntegrations();
     } catch (err) {
-      setIfscRes({ valid: false, bank: null, branch: null, city: null, neft: false, rtgs: false });
-      setError(err instanceof Error ? err.message : 'Invalid IFSC code');
+      setToastMsg(`Test failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setTestingService(null);
     }
   };
+
+  const testAllIntegrations = async () => {
+    setTestingAll(true);
+    try {
+      const res = await apiJson<{ ok: boolean }>(`/api/integrations/test-all`, { method: 'POST' });
+      setToastMsg(res.ok ? '✓ Diagnostic sweep completed across all 11 services!' : 'Sweep encountered errors.');
+      loadIntegrations();
+    } catch (err) {
+      setToastMsg(`Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setTestingAll(false);
+    }
+  };
+
+  const toggleSetup = (id: string) => {
+    setExpandedSetup((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(id);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const renderServiceIcon = (icon: string) => {
+    switch (icon) {
+      case 'Database': return <Database size={16} className="text-cyan-400" />;
+      case 'HardDrive': return <HardDrive size={16} className="text-purple-400" />;
+      case 'Sparkles': return <Sparkles size={16} className="text-indigo-400" />;
+      case 'MessageSquare': return <MessageSquare size={16} className="text-emerald-400" />;
+      case 'Mail': return <Mail size={16} className="text-blue-400" />;
+      case 'Mic': return <Mic size={16} className="text-amber-400" />;
+      case 'Volume2': return <Volume2 size={16} className="text-rose-400" />;
+      case 'CreditCard': return <CreditCard size={16} className="text-teal-400" />;
+      case 'FileSpreadsheet': return <FileSpreadsheet size={16} className="text-emerald-400" />;
+      case 'BookOpen': return <BookOpen size={16} className="text-blue-400" />;
+      case 'ShieldAlert': return <ShieldAlert size={16} className="text-amber-400" />;
+      default: return <Plug size={16} className="text-slate-400" />;
+    }
+  };
+
+  const renderStatusBadge = (status: IntegrationStatus) => {
+    switch (status) {
+      case 'CONNECTED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950/40 text-emerald-400 border border-emerald-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            CONNECTED
+          </span>
+        );
+      case 'FALLBACK_ACTIVE':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-cyan-950/40 text-cyan-400 border border-cyan-500/30" title="Running on verified local or deterministic fallback">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+            FALLBACK ACTIVE
+          </span>
+        );
+      case 'UNVERIFIED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-950/40 text-purple-300 border border-purple-500/30">
+            <Clock size={11} />
+            UNVERIFIED
+          </span>
+        );
+      case 'DEGRADED':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-950/40 text-amber-400 border border-amber-500/30">
+            <AlertTriangle size={11} />
+            DEGRADED
+          </span>
+        );
+      case 'ERROR':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-950/40 text-rose-400 border border-rose-500/30">
+            <XCircle size={11} />
+            ERROR
+          </span>
+        );
+      case 'NOT_CONFIGURED':
+      default:
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 text-slate-400 border border-slate-700">
+            <Key size={11} />
+            NOT CONFIGURED
+          </span>
+        );
+    }
+  };
+
+  const filteredIntegrations = (data?.integrations || []).filter((item) => {
+    if (categoryFilter === 'all') return true;
+    if (categoryFilter === 'db_storage') return item.category === 'Database' || item.category === 'Storage';
+    if (categoryFilter === 'ai_voice') return item.category === 'Intelligence' || item.category === 'Voice';
+    if (categoryFilter === 'comms') return item.category === 'Messaging';
+    if (categoryFilter === 'erp_finance') return item.category === 'ERP & Banking';
+    if (categoryFilter === 'compliance') return item.category === 'Compliance';
+    return true;
+  });
 
   return (
     <ModalDialog
       open={open}
       onClose={onClose}
-      title="Connectors, API Keys & n8n Automation Hub"
+      title="Integration Control Center & External Infrastructure"
+      
       footer={
-        <>
-          <button type="button" className="btn" onClick={load} disabled={loading}>
-            <RefreshCw size={13} /> Refresh Status
-          </button>
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Done
-          </button>
-        </>
+        <div className="flex items-center justify-between w-full text-xs">
+          <div className="text-slate-400">
+            {data?.summary ? (
+              <span>
+                Evidence: <strong className="text-emerald-400">{data.summary.connected} Connected</strong> •{' '}
+                <strong className="text-cyan-400">{data.summary.fallbackActive} Fallbacks</strong> •{' '}
+                <strong className="text-slate-400">{data.summary.notConfigured} Unconfigured</strong>
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-sm flex items-center gap-1.5"
+              onClick={loadIntegrations}
+              disabled={loading || testingAll}
+            >
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+              <span>Refresh Status</span>
+            </button>
+            <button type="button" className="btn btn-sm btn-primary" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </div>
       }
     >
-      {error && (
-        <div className="card" style={{ background: 'var(--danger-soft)', color: 'var(--danger)', padding: 10, marginBottom: 10, fontSize: 12.5 }}>
-          {error}
-        </div>
-      )}
-      {notice && (
-        <div className="card" style={{ background: 'var(--success-soft)', color: 'var(--success)', padding: 10, marginBottom: 10, fontSize: 12.5 }}>
-          {notice}
-        </div>
-      )}
+      <div className="space-y-4">
 
-      {/* 0. Live Connected n8n Instance Monitor */}
-      {liveN8n?.connected && (
-        <div className="card" style={{ padding: 12, marginBottom: 14, border: '1px solid var(--success)' }}>
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <CheckCircle2 size={14} color="var(--success)" /> Live n8n Connected ({liveN8n.baseUrl})
-            </div>
-            <span className="pill pill-success" style={{ fontSize: 10 }}>
-              {liveN8n.workflows.filter((w) => w.active).length}/{liveN8n.workflows.length} Active
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {liveN8n.workflows.map((wf) => (
-              <div
-                key={wf.id}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12,
-                  padding: '5px 8px',
-                  borderRadius: 6,
-                  background: 'var(--bg-subtle)',
-                }}
-              >
-                <span>{wf.name}</span>
-                <div className="row" style={{ gap: 6 }}>
-                  <span className={`pill ${wf.active ? 'pill-success' : 'pill-warning'}`} style={{ fontSize: 10 }}>
-                    {wf.active ? 'ACTIVE' : 'READY (Add OAuth)'}
-                  </span>
-                  <a href={wf.editorUrl} target="_blank" rel="noreferrer" className="btn btn-sm">
-                    Open ↗
-                  </a>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 1. Ready-to-Import n8n Workflow Blueprints */}
-      <div style={{ marginBottom: 16 }}>
-        <h4 style={{ margin: '0 0 8px', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Plug size={14} /> Ready-to-Import n8n Workflows (End-to-End Automation)
-        </h4>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {(catalog?.n8nTemplates || []).map((tpl) => (
-            <div
-              key={tpl.slug}
-              className="card"
-              style={{ padding: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}
-            >
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{tpl.title}</div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 2 }}>{tpl.description}</div>
-              </div>
-              <a
-                className="btn btn-sm"
-                href={`${API_BASE}${tpl.downloadPath}`}
-                download={`kraya-n8n-${tpl.slug}.json`}
-                style={{ whiteSpace: 'nowrap' }}
-              >
-                <Download size={12} /> JSON
-              </a>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 2. Connect n8n / Zapier / Make Webhook */}
-      <div className="card" style={{ padding: 12, marginBottom: 16, background: 'var(--bg-subtle)' }}>
-        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
-          Connect Outbound n8n / Automation Webhook (Signed HMAC-SHA256)
-        </div>
-        <form onSubmit={handleAddWebhook} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div className="grid-2" style={{ gap: 8 }}>
-            <input
-              placeholder="Webhook Name (e.g. n8n Money Leak Alerts)"
-              value={whName}
-              onChange={(e) => setWhName(e.target.value)}
-              required
-            />
-            <select value={whProvider} onChange={(e) => setWhProvider(e.target.value)}>
-              <option value="n8n">n8n Workflow</option>
-              <option value="make">Make.com</option>
-              <option value="zapier">Zapier</option>
-              <option value="custom">Custom HTTP Webhook</option>
-            </select>
-          </div>
-          <input
-            type="url"
-            placeholder="https://your-n8n-instance.app.n8n.cloud/webhook/kraya-events"
-            value={whUrl}
-            onChange={(e) => setWhUrl(e.target.value)}
-            required
-          />
-          <div className="row" style={{ gap: 8 }}>
-            <input
-              placeholder="Optional HMAC Signing Secret"
-              value={whSecret}
-              onChange={(e) => setWhSecret(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <button type="submit" className="btn btn-sm btn-primary">
-              + Connect Webhook
+        {/* Global Toast / Notice */}
+        {toastMsg && (
+          <div className="p-2.5 rounded-lg bg-slate-800 border border-indigo-500/30 text-xs text-indigo-200 flex items-center justify-between">
+            <span>{toastMsg}</span>
+            <button type="button" onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-white">
+              ✕
             </button>
-          </div>
-        </form>
-
-        {(catalog?.webhooks || []).length > 0 && (
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {catalog!.webhooks.map((wh) => (
-              <div
-                key={wh.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  padding: '6px 8px',
-                  borderRadius: 6,
-                  background: 'var(--bg-surface)',
-                  fontSize: 12,
-                }}
-              >
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  <strong>{wh.name}</strong> <span className="pill" style={{ fontSize: 10 }}>{wh.provider}</span>
-                  <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-secondary)' }}>
-                    {wh.targetUrl}
-                  </div>
-                </div>
-                <div className="row" style={{ gap: 4 }}>
-                  <button type="button" className="btn btn-sm" onClick={() => handleTestWebhook(wh.id)}>
-                    <Send size={11} /> Test
-                  </button>
-                  <button type="button" className="btn btn-sm" onClick={() => handleDeleteWebhook(wh.id)}>
-                    <Trash2 size={11} />
-                  </button>
-                </div>
-              </div>
-            ))}
           </div>
         )}
-      </div>
 
-      {/* 3. Instant Live Indian Verification Tools (Udyam MSME + Free Razorpay IFSC) */}
-      <div className="grid-2" style={{ gap: 10, marginBottom: 16 }}>
-        <div className="card" style={{ padding: 10 }}>
-          <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <ShieldCheck size={13} /> Udyam MSME Verifier (43B-h)
-          </div>
-          <div className="row" style={{ gap: 6 }}>
-            <input
-              placeholder="UDYAM-KA-03-0012345"
-              value={udyamInput}
-              onChange={(e) => setUdyamInput(e.target.value)}
-              style={{ flex: 1, fontSize: 12 }}
-            />
-            <button type="button" className="btn btn-sm" onClick={handleVerifyUdyam}>
-              Verify
+        {/* Header Tabs & Actions */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setActiveTab('control_center')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition ${
+                activeTab === 'control_center'
+                  ? 'bg-indigo-600/20 text-cyan-300 border border-indigo-500/40'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              ⚡ 11 Core Service Integrations
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('webhooks_n8n')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition ${
+                activeTab === 'webhooks_n8n'
+                  ? 'bg-indigo-600/20 text-cyan-300 border border-indigo-500/40'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🔗 n8n Webhook Bus & Tools ({webhooks.length})
             </button>
           </div>
-          {udyamRes && (
-            <div style={{ fontSize: 11.5, marginTop: 6, color: udyamRes.formatValid ? 'var(--text-secondary)' : 'var(--danger)' }}>
-              {udyamRes.note}{' '}
-              <a href={udyamRes.officialPortalUrl} target="_blank" rel="noreferrer">
-                Official Portal ↗
-              </a>
-            </div>
+
+          {activeTab === 'control_center' && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary flex items-center gap-1.5 text-xs shrink-0"
+              onClick={testAllIntegrations}
+              disabled={testingAll || loading}
+            >
+              <Play size={12} className={testingAll ? 'animate-spin' : ''} />
+              <span>{testingAll ? 'Testing All Services...' : 'Test All 11 Integrations'}</span>
+            </button>
           )}
         </div>
 
-        <div className="card" style={{ padding: 10 }}>
-          <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Building2 size={13} /> Live Indian Bank IFSC Lookup (Free)
-          </div>
-          <div className="row" style={{ gap: 6 }}>
-            <input
-              placeholder="HDFC0000001"
-              value={ifscInput}
-              onChange={(e) => setIfscInput(e.target.value)}
-              style={{ flex: 1, fontSize: 12 }}
-            />
-            <button type="button" className="btn btn-sm" onClick={handleVerifyIfsc}>
-              Lookup
-            </button>
-          </div>
-          {ifscRes && (
-            <div style={{ fontSize: 11.5, marginTop: 6, color: ifscRes.valid ? 'var(--success)' : 'var(--danger)' }}>
-              {ifscRes.valid
-                ? `${ifscRes.bank || 'Valid IFSC'}${ifscRes.branch ? ` · ${ifscRes.branch}` : ''}${ifscRes.city ? ` (${ifscRes.city})` : ''} · ${ifscRes.rtgs ? 'RTGS/NEFT OK' : 'NEFT'}`
-                : 'Invalid IFSC code'}
-            </div>
-          )}
-        </div>
-      </div>
+        {/* TAB 1: INTEGRATION CONTROL CENTER */}
+        {activeTab === 'control_center' && (
+          <div className="space-y-4">
 
-      {/* 4. External API & Connector Status Grid */}
-      <div>
-        <h4 style={{ margin: '0 0 8px', fontSize: 13.5 }}>External API Connectors &amp; Secrets Status</h4>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {(catalog?.connectors || []).map((c) => {
-            const isConnected = c.status === 'connected' || c.status === 'free_ifsc_live';
-            return (
-              <div
-                key={c.id}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  border: '1px solid var(--border-subtle)',
-                  fontSize: 12,
-                }}
-              >
-                <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong>{c.name}</strong>
-                  <span className={`pill ${isConnected ? 'pill-success' : 'pill-warning'}`} style={{ fontSize: 10 }}>
-                    {isConnected ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}{' '}
-                    {c.status.replace(/_/g, ' ')}
-                  </span>
-                </div>
-                <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>{c.description}</div>
-                <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-                  Env: {c.envVars.join(', ')}
-                </div>
+            {/* Category Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              {[
+                { key: 'all', label: 'All Services' },
+                { key: 'db_storage', label: 'Database & Storage' },
+                { key: 'ai_voice', label: 'AI & Speech' },
+                { key: 'comms', label: 'Messaging & Email' },
+                { key: 'erp_finance', label: 'ERP & Banking' },
+                { key: 'compliance', label: 'GST & Compliance' },
+              ].map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setCategoryFilter(f.key)}
+                  className={`px-2.5 py-1 rounded-md transition ${
+                    categoryFilter === f.key
+                      ? 'bg-slate-700 text-white font-medium border border-slate-600'
+                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Service Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {filteredIntegrations.map((item) => {
+                const isTesting = testingService === item.id;
+                const isExpanded = expandedSetup[item.id] || false;
+
+                return (
+                  <div
+                    key={item.id}
+                    className="p-4 rounded-xl border border-slate-800 bg-slate-900/70 hover:border-slate-700 transition flex flex-col justify-between space-y-3"
+                  >
+                    <div>
+                      {/* Top Header */}
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 rounded-lg bg-slate-800 border border-slate-700/80">
+                            {renderServiceIcon(item.icon)}
+                          </div>
+                          <div>
+                            <div className="font-semibold text-white text-xs">{item.name}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              Mode: <span className="text-slate-300">{item.providerMode}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div>{renderStatusBadge(item.status)}</div>
+                      </div>
+
+                      {/* Diagnostic & Telemetry Bar */}
+                      <div className="flex items-center gap-3 text-[10px] text-slate-400 py-1.5 border-y border-slate-800/80 mb-2 font-mono">
+                        <div>
+                          LATENCY:{' '}
+                          <span className={item.latencyMs ? 'text-cyan-400' : 'text-slate-500'}>
+                            {item.latencyMs ? `${item.latencyMs} ms` : '—'}
+                          </span>
+                        </div>
+                        <div>
+                          LAST TESTED:{' '}
+                          <span className="text-slate-300">
+                            {item.lastTestedAt ? new Date(item.lastTestedAt).toLocaleTimeString() : 'Never'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Error Alert Box (if present) */}
+                      {item.lastError && (
+                        <div className="p-2 rounded-lg bg-rose-950/30 border border-rose-800/50 text-[11px] text-rose-300 mb-2">
+                          <strong className="font-semibold">Last Error:</strong> {item.lastError}
+                        </div>
+                      )}
+
+                      {/* Supported Operations */}
+                      <div className="space-y-1 mb-2">
+                        <div className="text-[10px] font-medium text-slate-400">Supported Capabilities:</div>
+                        <div className="flex flex-wrap gap-1">
+                          {item.supportedOperations.slice(0, 3).map((op, i) => (
+                            <span
+                              key={i}
+                              className="px-2 py-0.5 rounded text-[9.5px] bg-slate-800/80 text-slate-300 border border-slate-700/60"
+                            >
+                              {op}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Setup Guide Accordion */}
+                      {isExpanded && (
+                        <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800 text-xs space-y-2 mt-2">
+                          <div className="text-[11px] text-slate-300">{item.setupGuide.description}</div>
+                          
+                          <div className="space-y-1">
+                            <div className="text-[10px] font-mono text-slate-400 flex items-center justify-between">
+                              <span>SAMPLE .ENV CONFIGURATION:</span>
+                              <button
+                                type="button"
+                                onClick={() => copyToClipboard(item.setupGuide.sampleEnv, item.id)}
+                                className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1"
+                              >
+                                {copiedKey === item.id ? <Check size={11} /> : <Copy size={11} />}
+                                <span>{copiedKey === item.id ? 'Copied' : 'Copy'}</span>
+                              </button>
+                            </div>
+                            <pre className="p-2 rounded bg-black/60 border border-slate-800 font-mono text-[10px] text-emerald-400 overflow-x-auto whitespace-pre-wrap">
+                              {item.setupGuide.sampleEnv}
+                            </pre>
+                          </div>
+
+                          {item.setupGuide.docsUrl && (
+                            <div className="pt-1">
+                              <a
+                                href={item.setupGuide.docsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[10px] text-cyan-400 hover:underline flex items-center gap-1"
+                              >
+                                <span>Official Provider Docs ↗</span>
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action Footer */}
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => toggleSetup(item.id)}
+                        className="text-[11px] text-slate-400 hover:text-white flex items-center gap-1"
+                      >
+                        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                        <span>{isExpanded ? 'Hide Setup' : 'Configure Credentials'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-sm flex items-center gap-1.5"
+                        onClick={() => testSingleIntegration(item.id)}
+                        disabled={isTesting || testingAll}
+                      >
+                        <RefreshCw size={11} className={isTesting ? 'animate-spin' : ''} />
+                        <span>{isTesting ? 'Testing...' : 'Test Connection'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+          </div>
+        )}
+
+        {/* TAB 2: n8n WEBHOOKS & DIRECTORY TOOLS */}
+        {activeTab === 'webhooks_n8n' && (
+          <div className="space-y-4 text-xs">
+            
+            {/* Notice on n8n Integration Contract */}
+            <div className="p-3 rounded-lg bg-indigo-950/30 border border-indigo-800/40 text-slate-300 space-y-1">
+              <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                <Info size={14} />
+                <span>External Automation Contract</span>
               </div>
-            );
-          })}
-        </div>
+              <p className="text-[11px] text-slate-400">
+                n8n workflow instances and triggers are connected via HMAC-signed webhooks. Primary factory transactions continue unblocked if the webhook target is offline.
+              </p>
+            </div>
+
+            {/* Registered Webhooks */}
+            <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 space-y-3">
+              <h4 className="font-semibold text-white">Registered Workspace Webhooks</h4>
+              {webhooks.length === 0 ? (
+                <div className="text-slate-500 py-3 text-center">No external webhooks registered yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {webhooks.map((wh) => (
+                    <div key={wh.id} className="p-2.5 rounded-lg bg-slate-800/80 border border-slate-700 flex items-center justify-between">
+                      <div>
+                        <div className="font-medium text-slate-200">{wh.name}</div>
+                        <div className="font-mono text-[10px] text-slate-400">{wh.targetUrl}</div>
+                      </div>
+                      <span className="pill pill-success text-[10px]">Active</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Recent Deliveries */}
+            <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 space-y-2">
+              <h4 className="font-semibold text-white">Recent Automation Deliveries</h4>
+              {deliveries.length === 0 ? (
+                <div className="text-slate-500 py-2 text-center">No webhook dispatches recorded.</div>
+              ) : (
+                <div className="space-y-1.5 font-mono text-[11px]">
+                  {deliveries.slice(0, 5).map((d) => (
+                    <div key={d.id} className="p-2 rounded bg-slate-800/60 flex items-center justify-between">
+                      <span className="text-cyan-400">{d.eventType}</span>
+                      <span className={d.ok ? 'text-emerald-400' : 'text-rose-400'}>
+                        HTTP {d.httpStatus} ({d.durationMs}ms)
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
       </div>
     </ModalDialog>
   );

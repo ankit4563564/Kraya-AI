@@ -14,6 +14,8 @@ import {
   Eye,
   Brain,
   Plug,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import {
   ApiError,
@@ -50,11 +52,11 @@ import { GlobalPromptDock } from './components/GlobalPromptDock';
 import { GlobalWorkflowTools, NavTab, WorkflowStageDef, WorkflowStageId } from './lib/workflow';
 
 const TAB_TITLES: Record<NavTab, string> = {
-  new_task: 'Guided Procurement Studio | Kraya AI',
+  new_task: 'Procurement Studio | Kraya AI',
   inbox: 'Unified Inbox | Kraya AI',
-  buying: 'Buying, RFQs & Landed Cost | Kraya AI',
-  daily: 'Maintenance, Daily & Invoice Audit | Kraya AI',
-  suppliers: 'My Suppliers | Kraya AI',
+  buying: 'Buying & RFQs | Kraya AI',
+  daily: 'Maintenance & Invoice Audit | Kraya AI',
+  suppliers: 'Supplier Directory | Kraya AI',
 };
 
 const roleBadgeLabel = (role: UserRole): string => {
@@ -62,7 +64,7 @@ const roleBadgeLabel = (role: UserRole): string => {
     case 'owner':
       return 'Owner';
     case 'clerk':
-      return 'Purchase Clerk';
+      return 'Purchaser';
     case 'ca':
       return 'CA Auditor';
     default:
@@ -86,6 +88,7 @@ export function App() {
   const [legalModalTab, setLegalModalTab] = useState<'plans' | 'dpdp' | 'terms' | null>(null);
   const [outreachReq, setOutreachReq] = useState<OutreachModalRequest | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
   // Global workflow modals so prompts work seamlessly from ANY page
   const [showDiscoverModal, setShowDiscoverModal] = useState(false);
@@ -149,7 +152,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    document.title = TAB_TITLES[activeTab] || 'Kraya AI — Procurement CFO';
+    document.title = TAB_TITLES[activeTab] || 'Kraya AI — Procurement Platform';
   }, [activeTab]);
 
   useEffect(() => {
@@ -161,15 +164,16 @@ export function App() {
     });
     loadAuthenticatedWorkspace();
 
-    const storedTheme = localStorage.getItem('color-scheme') || 'light';
-    const initTheme = storedTheme === 'dark' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', initTheme);
+    const storedTheme = (localStorage.getItem('color-scheme') || 'light') as 'light' | 'dark';
+    setTheme(storedTheme);
+    document.documentElement.setAttribute('data-theme', storedTheme);
     const meta = document.querySelector('meta[name="color-scheme"]');
-    if (meta) meta.setAttribute('content', initTheme);
+    if (meta) meta.setAttribute('content', storedTheme);
 
     const onStorage = (e: StorageEvent) => {
       if (e.key === 'color-scheme') {
-        const val = e.newValue === 'dark' ? 'dark' : 'light';
+        const val = (e.newValue === 'dark' ? 'dark' : 'light') as 'light' | 'dark';
+        setTheme(val);
         const m = document.querySelector('meta[name="color-scheme"]');
         if (m) m.setAttribute('content', val);
         document.documentElement.setAttribute('data-theme', val);
@@ -181,6 +185,15 @@ export function App() {
       window.removeEventListener('storage', onStorage);
     };
   }, [loadAuthenticatedWorkspace]);
+
+  const toggleTheme = () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    localStorage.setItem('color-scheme', next);
+    document.documentElement.setAttribute('data-theme', next);
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute('content', next);
+  };
 
   const handleLogout = async () => {
     setStoredAuthToken(null);
@@ -203,9 +216,9 @@ export function App() {
   if (authLoading) {
     return (
       <div className="auth-shell">
-        <div className="auth-card" style={{ textAlign: 'center', padding: 32 }}>
-          <div className="brand-mark" style={{ margin: '0 auto 12px' }}>K</div>
-          <div style={{ color: 'var(--text-secondary)' }}>Loading Kraya workspace...</div>
+        <div className="auth-card" style={{ textAlign: 'center', padding: 36 }}>
+          <div className="brand-mark" style={{ margin: '0 auto 14px', width: 36, height: 36, fontSize: 16 }}>K</div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 13.5 }}>Connecting to Kraya workspace...</div>
         </div>
       </div>
     );
@@ -261,18 +274,18 @@ export function App() {
   const userRole: UserRole = authMe?.role || 'owner';
   const isCaReadOnly = userRole === 'ca';
 
-  // Exact 5 Minimal Navigation Items per PRD §2
+  // Exact 5 Navigation Tabs
   const navItems: Array<{
     id: NavTab;
     label: string;
     icon: React.ComponentType<{ size?: number }>;
     badge?: number;
   }> = [
-    { id: 'new_task', label: 'New Task', icon: Plus },
-    { id: 'inbox', label: 'Unified Inbox', icon: Inbox, badge: summary?.inboxCount || undefined },
+    { id: 'new_task', label: 'Studio', icon: Plus },
+    { id: 'inbox', label: 'Inbox', icon: Inbox, badge: summary?.inboxCount || undefined },
     { id: 'buying', label: 'Buying & RFQs', icon: ShoppingBag, badge: summary?.openRfqsCount || undefined },
-    { id: 'daily', label: 'Maintenance & Daily', icon: CalendarCheck, badge: summary?.openTasksCount || undefined },
-    { id: 'suppliers', label: 'My Suppliers', icon: Users, badge: summary?.suppliersCount || undefined },
+    { id: 'daily', label: 'Daily & Audit', icon: CalendarCheck, badge: summary?.openTasksCount || undefined },
+    { id: 'suppliers', label: 'Suppliers', icon: Users, badge: summary?.suppliersCount || undefined },
   ];
 
   const handleSelectNav = (id: NavTab) => {
@@ -359,22 +372,23 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Main navigation">
-        <div className="brand" style={{ justifyContent: 'space-between' }}>
+      {/* Mobile Drawer */}
+      <aside className={`sidebar ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Main mobile navigation">
+        <div className="brand" style={{ justifyContent: 'space-between', padding: '0 4px' }}>
           <div className="row" style={{ gap: 10 }}>
             <div className="brand-mark">K</div>
             <div className="brand-text">
               <strong>Kraya</strong>
-              <span>AI Procurement CFO</span>
+              <span className="brand-badge">B2B</span>
             </div>
           </div>
           <button
             type="button"
-            className="btn btn-sm mobile-menu-btn"
+            className="btn btn-sm btn-icon"
             onClick={() => setMobileMenuOpen(false)}
             aria-label="Close navigation menu"
           >
-            <X size={15} />
+            <X size={16} />
           </button>
         </div>
 
@@ -405,14 +419,14 @@ export function App() {
           {authMe?.authenticated && authMe.user ? (
             <div>
               <strong>{workspace?.legalName || 'Workspace'}</strong>
-              <div className="mono" style={{ fontSize: 11, marginTop: 2 }}>
+              <div className="mono" style={{ fontSize: 11, marginTop: 2, color: 'var(--text-muted)' }}>
                 {workspace?.gstin || `State ${workspace?.stateCode || '29'} · WACC ${workspace?.waccPct ?? 15}%`}
               </div>
-              <div style={{ fontSize: 11, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ fontSize: 11.5, marginTop: 6 }}>
                 <div style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{authMe.user.name}</div>
-                <div style={{ color: 'var(--text-secondary)' }}>{authMe.user.email}</div>
-                <div style={{ marginTop: 3 }}>
-                  <span className="pill" style={{ fontSize: 10, padding: '2px 8px', fontWeight: 600 }}>
+                <div style={{ color: 'var(--text-muted)' }}>{authMe.user.email}</div>
+                <div style={{ marginTop: 4 }}>
+                  <span className="pill" style={{ fontSize: 10 }}>
                     {roleBadgeLabel(userRole)}
                   </span>
                 </div>
@@ -420,10 +434,7 @@ export function App() {
             </div>
           ) : (
             <div>
-              <strong>{workspace?.legalName || 'Local Dev Workspace'}</strong>
-              <div className="mono" style={{ fontSize: 11, marginTop: 2 }}>
-                Local Dev Mode
-              </div>
+              <strong>{workspace?.legalName || 'Workspace'}</strong>
               <div style={{ marginTop: 8 }}>
                 <button
                   type="button"
@@ -431,7 +442,7 @@ export function App() {
                   style={{ width: '100%' }}
                   onClick={() => setShowAuthModal(true)}
                 >
-                  <LogIn size={13} /> Sign In / Sign Up
+                  <LogIn size={13} /> Sign In
                 </button>
               </div>
             </div>
@@ -440,13 +451,13 @@ export function App() {
           {authMe && authMe.workspaces.length > 1 && (
             <div className="field" style={{ marginBottom: 0 }}>
               <label htmlFor="ws-switcher" style={{ fontSize: 11 }}>
-                Switch Company Workspace
+                Switch Workspace
               </label>
               <select
                 id="ws-switcher"
                 value={authMe.workspaceId}
                 onChange={(e) => handleSwitchWorkspace(e.target.value)}
-                style={{ fontSize: 12, padding: '5px 8px' }}
+                style={{ fontSize: 12, padding: '4px 6px' }}
               >
                 {authMe.workspaces.map((w) => (
                   <option key={w.workspaceId} value={w.workspaceId}>
@@ -464,12 +475,12 @@ export function App() {
               style={{ flex: 1 }}
               onClick={() => setShowSettings(true)}
             >
-              <Settings size={13} /> Settings &amp; Team
+              <Settings size={13} /> Settings
             </button>
             {authMe?.authenticated && (
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-sm btn-icon"
                 onClick={handleLogout}
                 title="Sign out"
                 aria-label="Sign out"
@@ -478,45 +489,23 @@ export function App() {
               </button>
             )}
           </div>
-
-          <div style={{ fontSize: 10.5, lineHeight: 1.45 }}>
-            Pre-payment verification &amp; CA audit support.{' '}
-            <button
-              type="button"
-              style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 10.5 }}
-              onClick={() => setLegalModalTab('plans')}
-            >
-              Plans &amp; Usage
-            </button>{' '}
-            ·{' '}
-            <button
-              type="button"
-              style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 10.5 }}
-              onClick={() => setLegalModalTab('dpdp')}
-            >
-              DPDP &amp; Terms
-            </button>
-          </div>
         </div>
       </aside>
 
+      {/* Main Desktop Container */}
       <div className="main-area">
         <header className="topbar">
           <div className="topbar-left">
-            <div className="brand" style={{ padding: 0 }}>
-              <div className="brand-mark" aria-hidden="true">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="9" stroke="#ffffff" strokeWidth="3" />
-                  <circle cx="14" cy="10" r="3.5" fill="#ffffff" />
-                </svg>
-              </div>
+            <div className="brand" onClick={() => handleSelectNav('new_task')}>
+              <div className="brand-mark" aria-hidden="true">K</div>
               <div className="brand-text">
-                <strong>Kraya AI</strong>
+                <strong>Kraya</strong>
+                <span className="brand-badge">B2B</span>
               </div>
             </div>
           </div>
 
-          <nav className="top-nav-tabs" aria-label="Main horizontal navigation">
+          <nav className="top-nav-tabs" aria-label="Main navigation">
             {navItems.map((item) => {
               const Icon = item.icon;
               return (
@@ -540,55 +529,79 @@ export function App() {
           <div className="topbar-right">
             <button
               type="button"
-              className="btn btn-sm mobile-menu-btn"
+              className="btn btn-sm mobile-menu-btn btn-icon"
               onClick={() => setMobileMenuOpen(true)}
-              aria-label="Open navigation menu"
+              aria-label="Open mobile navigation"
             >
               <Menu size={16} />
             </button>
+
+            <span className={`leak-counter-pill ${(summary?.totalProtectedPaise ?? 0) > 0 ? 'has-leaks' : ''}`}>
+              <ShieldCheck size={13} />
+              <span>
+                Protected: <strong className="mono">{formatINR(summary?.totalProtectedPaise ?? 0, 0)}</strong>
+              </span>
+            </span>
+
             <button
               type="button"
               className="btn btn-sm"
               onClick={() => setShowAgentFleet(true)}
-              title="Inspect & run all 8 Specialist AI Agent Brains"
+              title="Inspect 8 AI Specialist Brains"
             >
-              <Brain size={13} /> 8 AI Brains
+              <Brain size={13} />
+              <span>AI Engines</span>
             </button>
+
             <button
               type="button"
               className="btn btn-sm"
               onClick={() => setShowConnectors(true)}
-              title="Manage n8n workflows, ERP APIs, GSTN, Udyam & external connectors"
+              title="ERP, GSTN & External APIs"
             >
-              <Plug size={13} /> n8n &amp; APIs
+              <Plug size={13} />
+              <span>APIs</span>
             </button>
+
             <button
               type="button"
               className="btn btn-sm"
               onClick={() => setShowEnterpriseHub(true)}
-              title="Enterprise Lifecycle Hub: D&B Risk Watch, SAP Ariba Catalog, Contract NLP, PR Budgets, Coupa P2P & Data Lake Feedback"
+              title="Enterprise Lifecycle: Risk, Catalogs & P2P"
             >
-              <ShieldCheck size={13} /> Enterprise Lifecycle
+              <ShieldCheck size={13} />
+              <span>Enterprise</span>
             </button>
-            <span className={`leak-counter-pill ${(summary?.totalProtectedPaise ?? 0) > 0 ? 'has-leaks' : ''}`}>
-              <ShieldCheck size={14} />
-              <span>
-                Protected:{' '}
-                <strong className="mono">{formatINR(summary?.totalProtectedPaise ?? 0, 0)}</strong>
-              </span>
-            </span>
+
             {isCaReadOnly && (
               <span className="pill" style={{ background: 'var(--warning-soft)', color: 'var(--warning)' }}>
                 <Eye size={12} /> CA Read-Only
               </span>
             )}
+
+            <button
+              type="button"
+              className="btn btn-sm btn-icon"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+
             {authMe?.authenticated && authMe.user ? (
-              <span className="pill user-role-pill" title={authMe.user.email}>
-                <span>{authMe.user.email.split('@')[0]}</span>
-                <strong style={{ fontSize: 9.5, textTransform: 'uppercase', opacity: 0.85 }}>
-                  ({roleBadgeLabel(userRole)})
-                </strong>
-              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setShowSettings(true)}
+                title="Workspace settings & team"
+              >
+                <Settings size={13} />
+                <span>{workspace?.legalName || authMe.user.email.split('@')[0]}</span>
+                <span className="pill" style={{ fontSize: 10, padding: '1px 5px', marginLeft: 2 }}>
+                  {roleBadgeLabel(userRole)}
+                </span>
+              </button>
             ) : (
               <button
                 type="button"
@@ -598,9 +611,7 @@ export function App() {
                 <LogIn size={13} /> Sign In
               </button>
             )}
-            <button type="button" className="btn btn-primary topbar-cta-btn" onClick={() => setShowSettings(true)}>
-              Workspace &amp; Team •
-            </button>
+
             {authMe?.authenticated && (
               <button
                 type="button"
@@ -613,7 +624,6 @@ export function App() {
               </button>
             )}
           </div>
-          <div className="scroll-progress-bar" aria-hidden="true" />
         </header>
 
         <main className="content-container" key={authMe?.workspaceId || 'ws'}>
@@ -634,6 +644,7 @@ export function App() {
               />
             </>
           )}
+
           {activeTab === 'new_task' && (
             <NewTaskView
               summary={summary}
@@ -645,6 +656,7 @@ export function App() {
               prefillPrompt={prefillPrompt}
             />
           )}
+
           {activeTab === 'inbox' && (
             <UnifiedInboxView
               userRole={userRole}
@@ -653,6 +665,7 @@ export function App() {
               refreshTick={refreshTick}
             />
           )}
+
           {activeTab === 'buying' && (
             <BuyingRfqsView
               userRole={userRole}
@@ -662,6 +675,7 @@ export function App() {
               refreshTick={refreshTick}
             />
           )}
+
           {activeTab === 'daily' && (
             <MaintenanceDailyView
               userRole={userRole}
@@ -671,6 +685,7 @@ export function App() {
               refreshTick={refreshTick}
             />
           )}
+
           {activeTab === 'suppliers' && (
             <SuppliersView
               userRole={userRole}
@@ -686,22 +701,38 @@ export function App() {
           <footer className="canvas-footer">
             <div className="canvas-footer-left">
               <strong>{workspace?.legalName || 'Workspace'}</strong>
-              <span className="mono" style={{ fontSize: 11, marginLeft: 8, color: 'var(--text-secondary)' }}>
+              <span className="mono" style={{ fontSize: 11, marginLeft: 6, color: 'var(--text-muted)' }}>
                 {workspace?.gstin || `State ${workspace?.stateCode || '29'} · WACC ${workspace?.waccPct ?? 15}%`}
               </span>
               {authMe?.authenticated && authMe.user && (
-                <span className="pill" style={{ marginLeft: 8, fontSize: 10, padding: '2px 8px' }}>
+                <span className="pill" style={{ marginLeft: 6, fontSize: 10 }}>
                   {roleBadgeLabel(userRole)}
                 </span>
               )}
             </div>
-            <div className="canvas-footer-right" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              Pre-payment verification &amp; CA audit support. Final GST ITC &amp; 43B(h) filings remain subject to your CA.
+            <div className="canvas-footer-right">
+              Pre-payment verification &amp; CA audit support.{' '}
+              <button
+                type="button"
+                style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}
+                onClick={() => setLegalModalTab('plans')}
+              >
+                Plans
+              </button>{' '}
+              ·{' '}
+              <button
+                type="button"
+                style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}
+                onClick={() => setLegalModalTab('dpdp')}
+              >
+                DPDP &amp; Compliance
+              </button>
             </div>
           </footer>
         )}
       </div>
 
+      {/* Global Modals */}
       <WorkspaceSettingsModal
         open={showSettings}
         workspace={workspace}

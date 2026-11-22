@@ -49,7 +49,7 @@ export function ModalDialog({ open, onClose, title, children, footer }: ModalDia
         <h2 id={titleId}>{title}</h2>
         <button
           type="button"
-          className="btn btn-sm"
+          className="btn btn-sm btn-icon"
           onClick={handleClose}
           aria-label="Close dialog"
         >

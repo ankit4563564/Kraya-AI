@@ -114,7 +114,7 @@ interface Props {
 }
 
 function riskPillClass(risk: string): string {
-  if (risk === 'critical' || risk === 'high') return 'pill-danger';
+  if (risk === 'critical' || risk === 'high') return 'pill-critical';
   if (risk === 'medium') return 'pill-warning';
   return 'pill-success';
 }
@@ -174,7 +174,7 @@ export function AgentFleetModal({ open, onClose }: Props) {
     <ModalDialog
       open={open}
       onClose={onClose}
-      title="Kraya 8-Agent Specialist Brain Fleet"
+      title="Specialist AI Procurement Engines"
       footer={
         <>
           <button type="button" className="btn" onClick={loadFleet} disabled={loading}>
