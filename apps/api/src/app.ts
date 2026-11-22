@@ -32,6 +32,9 @@ import {
   generateLandedCostWorkbook,
   generateMonthlyCaAuditPack,
   generateTallyPurchaseXml,
+  generateZohoBooksBillsCsv,
+  parseBomIndentTable,
+  planAutonomousProcurementSweep,
   OutreachLanguage,
   OutreachScenario,
   parseWhatsAppCloudWebhook,
@@ -3448,6 +3451,18 @@ export function createApp(envOverride?: Partial<AppEnv>) {
         return da - db;
       });
 
+    const concentrationRisk =
+      totalInvoicedPaise > 0 && topSuppliers.length > 0
+        ? topSuppliers
+            .map((s) => ({
+              supplierId: s.supplierId,
+              name: s.name,
+              sharePct: Math.round((s.spendPaise / totalInvoicedPaise) * 1000) / 10,
+              spendPaise: s.spendPaise,
+            }))
+            .filter((s) => s.sharePct >= 60)
+        : [];
+
     return c.json({
       totals: {
         totalPoSpendPaise,
@@ -3459,8 +3474,225 @@ export function createApp(envOverride?: Partial<AppEnv>) {
       },
       spendByCategory,
       topSuppliers,
+      concentrationRisk,
       priceCreepAlerts,
       paymentCliffs,
+    });
+  });
+
+  // =========================================================================
+  // PHASE 14 — AUTONOMOUS PROCUREMENT WORKFORCE (ZERO MANUAL DATA ENTRY)
+  // =========================================================================
+  app.post('/api/automation/run-sweep', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+    const db = await getDb(getEnv('DATABASE_URL'));
+
+    const [rfqs, allQuotes, pos, grns, invs, amcs, sups, openTasks] = await Promise.all([
+      db.select().from(schema.rfqs).where(eq(schema.rfqs.workspaceId, wsId)),
+      db.select().from(schema.quotes).where(eq(schema.quotes.workspaceId, wsId)),
+      db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.workspaceId, wsId)),
+      db.select().from(schema.grnReceipts).where(eq(schema.grnReceipts.workspaceId, wsId)),
+      db.select().from(schema.invoices).where(eq(schema.invoices.workspaceId, wsId)),
+      db.select().from(schema.amcSchedules).where(eq(schema.amcSchedules.workspaceId, wsId)),
+      db.select().from(schema.suppliers).where(eq(schema.suppliers.workspaceId, wsId)),
+      db
+        .select()
+        .from(schema.dailyTasks)
+        .where(and(eq(schema.dailyTasks.workspaceId, wsId), eq(schema.dailyTasks.status, 'open'))),
+    ]);
+
+    const supMap = new Map(sups.map((s) => [s.id, s]));
+    const quoteCounts = new Map<string, number>();
+    for (const q of allQuotes) {
+      quoteCounts.set(q.rfqId, (quoteCounts.get(q.rfqId) || 0) + 1);
+    }
+    const fullGrnPoIds = new Set(grns.filter((g) => g.qcStatus === 'accepted').map((g) => g.poId));
+
+    const plan = planAutonomousProcurementSweep({
+      todayIso: todayIso(),
+      rfqs: rfqs.map((r) => ({
+        id: r.id,
+        rfqNumber: r.rfqNumber,
+        title: r.title,
+        status: r.status,
+        quoteCount: quoteCounts.get(r.id) || 0,
+        createdAt: r.createdAt,
+      })),
+      pos: pos.map((p) => ({
+        id: p.id,
+        poNumber: p.poNumber,
+        supplierId: p.supplierId,
+        supplierName: supMap.get(p.supplierId)?.name || 'Supplier',
+        deliveryDueAt: p.deliveryDueAt,
+        invoiceStatus: p.invoiceStatus,
+        cancelledAt: p.cancelledAt,
+        hasFullGrn: fullGrnPoIds.has(p.id),
+      })),
+      invoices: invs.map((i) => ({
+        id: i.id,
+        invoiceNumber: i.invoiceNumber,
+        supplierId: i.supplierId,
+        supplierName: supMap.get(i.supplierId)?.name || 'Supplier',
+        grandTotalPaise: i.grandTotalPaise,
+        msme43bhDueAt: i.msme43bhDueAt,
+        rule37CliffAt: i.rule37CliffAt,
+        paidAt: i.paidAt,
+      })),
+      amcs: amcs.map((a) => ({
+        id: a.id,
+        assetName: a.assetName,
+        supplierId: a.supplierId,
+        supplierName: a.supplierId ? supMap.get(a.supplierId)?.name || null : null,
+        nextDueAt: a.nextDueAt,
+        status: a.status,
+      })),
+      suppliers: sups.map((s) => ({
+        id: s.id,
+        name: s.name,
+        phone: s.phone,
+        email: s.email,
+        gstin: s.gstin,
+        gstRegime: s.gstRegime,
+        udyamTier: s.udyamTier,
+        creditDays: s.creditDays,
+      })),
+      existingOpenTasks: openTasks.map((t) => ({ kind: t.kind, relatedId: t.relatedId })),
+    });
+
+    const createdTasks = [];
+    for (const task of plan.plannedTasks) {
+      const id = uid('tsk');
+      await db.insert(schema.dailyTasks).values({
+        id,
+        workspaceId: wsId,
+        kind: task.kind,
+        title: task.title,
+        supplierId: task.supplierId,
+        relatedId: task.relatedId,
+        priority: task.priority,
+        dueAt: task.dueAt,
+        suggestedMessage: task.suggestedMessage,
+        status: 'open',
+      });
+      createdTasks.push({ id, ...task });
+    }
+
+    await recordAuditLog(db, ctx, 'autonomous_sweep_executed', 'workspace', wsId, {
+      createdTasksCount: createdTasks.length,
+      summary: plan.summary,
+    });
+
+    return c.json({
+      createdTasksCount: createdTasks.length,
+      createdTasks,
+      kycScores: plan.kycScores,
+      summary: plan.summary,
+    });
+  });
+
+  app.post('/api/rfqs/bulk-import', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+    const db = await getDb(getEnv('DATABASE_URL'));
+
+    const body = await c.req.json<{ csvText: string }>();
+    if (!body.csvText?.trim()) {
+      return c.json({ error: 'BOM CSV or TSV table text is required.' }, 400);
+    }
+
+    const parsed = parseBomIndentTable(body.csvText);
+    if (parsed.validRows.length === 0) {
+      return c.json(
+        { error: parsed.skippedRows[0]?.reason || 'No valid BOM rows found.', skippedRows: parsed.skippedRows },
+        400
+      );
+    }
+
+    const existingRfqs = await db
+      .select({ id: schema.rfqs.id })
+      .from(schema.rfqs)
+      .where(eq(schema.rfqs.workspaceId, wsId));
+    let seq = existingRfqs.length + 1;
+    const year = new Date().getFullYear();
+
+    const createdRfqs = [];
+    for (const row of parsed.validRows) {
+      const id = uid('rfq');
+      const rfqNumber = `RFQ-${year}-${String(seq++).padStart(4, '0')}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
+      await db.insert(schema.rfqs).values({
+        id,
+        workspaceId: wsId,
+        rfqNumber,
+        title: row.title,
+        type: 'initial',
+        itemsJson: [
+          {
+            description: row.itemDescription,
+            qty: row.qty,
+            unit: row.unit,
+            category: row.category,
+            hsnCode: row.hsnCode,
+            targetRatePaise: row.targetRatePaise,
+            targetCreditDays: row.targetCreditDays,
+          },
+        ],
+        deliveryDueAt: row.requiredByDate,
+        status: 'open',
+      });
+      createdRfqs.push({ id, rfqNumber, title: row.title, qty: row.qty, unit: row.unit });
+    }
+
+    await recordAuditLog(db, ctx, 'bom_bulk_imported', 'rfq_batch', wsId, {
+      createdCount: createdRfqs.length,
+      skippedCount: parsed.skippedRows.length,
+    });
+
+    return c.json(
+      {
+        createdCount: createdRfqs.length,
+        createdRfqs,
+        skippedRows: parsed.skippedRows,
+      },
+      201
+    );
+  });
+
+  app.get('/api/exports/zoho-books.csv', async (c) => {
+    const ctx = c.get('auth');
+    const wsId = ctx.workspaceId;
+    const db = await getDb(getEnv('DATABASE_URL'));
+    const [invs, sups] = await Promise.all([
+      db.select().from(schema.invoices).where(eq(schema.invoices.workspaceId, wsId)).orderBy(desc(schema.invoices.createdAt)),
+      db.select().from(schema.suppliers).where(eq(schema.suppliers.workspaceId, wsId)),
+    ]);
+    const supMap = new Map(sups.map((s) => [s.id, s]));
+
+    const safeInvoices = invs.filter((i) => i.imsSuggestedAction !== 'REJECT');
+    const csv = generateZohoBooksBillsCsv(
+      safeInvoices.map((inv) => {
+        const sup = supMap.get(inv.supplierId);
+        return {
+          billNumber: inv.invoiceNumber,
+          billDate: inv.invoiceDate,
+          dueDate: inv.msme43bhDueAt || inv.paymentDueAt || inv.invoiceDate,
+          vendorName: sup?.name || 'Sundry Creditor',
+          vendorGstin: inv.supplierGstin ?? sup?.gstin ?? null,
+          taxablePaise: inv.taxablePaise,
+          cgstPaise: inv.cgstPaise,
+          sgstPaise: inv.sgstPaise,
+          igstPaise: inv.igstPaise,
+          grandTotalPaise: inv.grandTotalPaise,
+          notes: `Kraya Verified (${inv.poMatchStatus.toUpperCase()} · IMS: ${inv.imsSuggestedAction})`,
+        };
+      })
+    );
+
+    return new Response(csv, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="kraya-zoho-books-bills-${todayIso()}.csv"`,
+      },
     });
   });
 

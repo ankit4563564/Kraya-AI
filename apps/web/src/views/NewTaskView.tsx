@@ -224,6 +224,13 @@ const CASE_STUDIES = [
   },
 ];
 
+const RADAR_STATUS_MESSAGES = [
+  'Active Procurement Radar • 60s GST 2.0 & Landed Cost Guard',
+  'Offline Mod-36 GSTIN Verification • Zero Hallucination',
+  'MSME Section 43B(h) 45-Day Payment Clock Active',
+  'GTA Double-Freight Tax & Rate Creep Shield Running',
+];
+
 export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOpenOutreach }: Props) {
   const isCaReadOnly = userRole === 'ca';
   const [prompt, setPrompt] = useState('');
@@ -241,11 +248,21 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
   const [activeCaseStudy, setActiveCaseStudy] = useState(0);
   const [marqueePaused, setMarqueePaused] = useState(false);
   const [processProgress, setProcessProgress] = useState(0);
+  const [radarMsgIdx, setRadarMsgIdx] = useState(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const processSectionRef = useRef<HTMLElement>(null);
+
+  // Subtle live status cycle in Hero Radar pill (respects reduced motion)
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const id = window.setInterval(() => {
+      setRadarMsgIdx((i) => (i + 1) % RADAR_STATUS_MESSAGES.length);
+    }, 3600);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Scroll-driven progress tracker for the Process Comparison section (drives live header fill, hour counter, and step checkmarks)
   useEffect(() => {
@@ -496,27 +513,29 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <circle cx="14" cy="10" r="3" fill="#ffffff" />
               </svg>
             </div>
-            <div className="radar-orbit-avatar orb-av-1" title="Factory CFO">
+            <div className="radar-orbit-avatar orb-av-1" data-role="Factory CFO" title="Factory CFO">
               <img src="/images/avatar-3.jpg" alt="Factory CFO" />
             </div>
-            <div className="radar-orbit-avatar orb-av-2" title="Purchase Manager">
+            <div className="radar-orbit-avatar orb-av-2" data-role="Purchase Lead" title="Purchase Manager">
               <img src="/images/avatar-2.jpg" alt="Purchase Manager" />
             </div>
-            <div className="radar-orbit-avatar orb-av-3" title="GST Compliance Officer">
+            <div className="radar-orbit-avatar orb-av-3" data-role="GST Officer" title="GST Compliance Officer">
               <img src="/images/avatar-5.jpg" alt="GST Compliance Officer" />
             </div>
-            <div className="radar-orbit-avatar orb-av-4" title="Raw Material Supplier">
+            <div className="radar-orbit-avatar orb-av-4" data-role="Steel Supplier" title="Raw Material Supplier">
               <img src="/images/avatar-1.jpg" alt="Raw Material Supplier" />
             </div>
-            <div className="radar-orbit-avatar orb-av-5" title="Accounts Payable">
+            <div className="radar-orbit-avatar orb-av-5" data-role="Accounts Payable" title="Accounts Payable">
               <img src="/images/avatar-4.jpg" alt="Accounts Payable" />
             </div>
-            <div className="radar-orbit-avatar orb-av-6" title="Udyam MSME Auditor">
+            <div className="radar-orbit-avatar orb-av-6" data-role="MSME Auditor" title="Udyam MSME Auditor">
               <img src="/images/avatar-6.jpg" alt="Udyam MSME Auditor" />
             </div>
-            <div className="radar-status-badge">
+            <div className="radar-status-badge" aria-live="polite">
               <span className="live-status-dot" />
-              <span>Active Procurement Radar &bull; 60s GST 2.0 &amp; Landed Cost Guard</span>
+              <span key={radarMsgIdx} className="radar-status-text">
+                {RADAR_STATUS_MESSAGES[radarMsgIdx]}
+              </span>
             </div>
           </div>
         </div>
@@ -848,12 +867,12 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                 <div className="network-center-node">
                   <span>&gt;10k</span>
                 </div>
-                <div className="network-orbit-node net-node-1" title="Raw Steel"><img src="/images/avatar-1.jpg" alt="" /></div>
-                <div className="network-orbit-node net-node-2" title="Polymers"><img src="/images/avatar-2.jpg" alt="" /></div>
-                <div className="network-orbit-node net-node-3" title="Fasteners"><img src="/images/avatar-3.jpg" alt="" /></div>
-                <div className="network-orbit-node net-node-4" title="Tooling"><img src="/images/avatar-4.jpg" alt="" /></div>
-                <div className="network-orbit-node net-node-5" title="Packaging"><img src="/images/avatar-5.jpg" alt="" /></div>
-                <div className="network-orbit-node net-node-6" title="Freight GTA"><img src="/images/avatar-6.jpg" alt="" /></div>
+                <div className="network-orbit-node net-node-1" data-role="Raw Steel" title="Raw Steel"><img src="/images/avatar-1.jpg" alt="" /></div>
+                <div className="network-orbit-node net-node-2" data-role="Polymers" title="Polymers"><img src="/images/avatar-2.jpg" alt="" /></div>
+                <div className="network-orbit-node net-node-3" data-role="Fasteners" title="Fasteners"><img src="/images/avatar-3.jpg" alt="" /></div>
+                <div className="network-orbit-node net-node-4" data-role="Tooling" title="Tooling"><img src="/images/avatar-4.jpg" alt="" /></div>
+                <div className="network-orbit-node net-node-5" data-role="Packaging" title="Packaging"><img src="/images/avatar-5.jpg" alt="" /></div>
+                <div className="network-orbit-node net-node-6" data-role="Freight GTA" title="Freight GTA"><img src="/images/avatar-6.jpg" alt="" /></div>
                 <svg className="network-lines-svg" viewBox="0 0 280 200" aria-hidden="true">
                   <path d="M 140 100 L 100 45 L 55 45" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
                   <path d="M 140 100 L 180 45 L 225 45" fill="none" stroke="#93c5fd" strokeWidth="1.5" />
@@ -1100,6 +1119,31 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
                     </div>
                   );
                 })}
+              </div>
+
+              {/* Sticky Completion Impact Card balances the 10-step Manual column while user scrolls */}
+              <div className={`ai-completion-summary-card ${aiDone ? 'is-visible' : ''}`}>
+                <div className="ai-summary-eyebrow">
+                  <Zap size={13} fill="currentColor" /> Kraya Finished — Manual Still Running ({manualHoursLive}h)
+                </div>
+                <div className="ai-summary-metric-row">
+                  <div className="ai-summary-stat">
+                    <strong className="mono">111+ hrs</strong>
+                    <span>Saved every month</span>
+                  </div>
+                  <div className="ai-summary-stat">
+                    <strong className="mono">₹0 Leaks</strong>
+                    <span>GST 2.0 &amp; 43B(h) safe</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ width: '100%', borderRadius: 999, justifyContent: 'center' }}
+                  onClick={focusPromptInput}
+                >
+                  Audit Your First Bill in 60s <ArrowRight size={13} />
+                </button>
               </div>
             </div>
           </div>
@@ -1531,7 +1575,10 @@ export function NewTaskView({ summary, userRole, onDataMutated, onNavigate, onOp
             </div>
 
             <div className="pricing-card card-dark scroll-reveal">
-              <div className="pricing-tier-name">Enterprise CFO</div>
+              <div className="pricing-card-top-row">
+                <div className="pricing-tier-name">Enterprise CFO</div>
+                <span className="pricing-popular-badge">Most Popular</span>
+              </div>
               <div className="pricing-price">
                 <span className="price-amount">₹24,999</span>
                 <span className="price-period">/month</span>

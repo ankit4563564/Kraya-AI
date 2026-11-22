@@ -11,3 +11,5 @@ export * from './supplier-search.js';
 export * from './negotiation.js';
 export * from './location-engine.js';
 export * from './verification-engine.js';
+export * from './bom-import.js';
+export * from './autonomous-sweep.js';

@@ -17,6 +17,7 @@ import { ModalDialog } from '../components/ModalDialog';
 import { OutreachModalRequest } from '../components/OutreachModal';
 import { SupplierDiscoveryModal } from '../components/SupplierDiscoveryModal';
 import { NegotiationModal, RfqNegotiationData } from '../components/NegotiationModal';
+import { BomBulkImportModal } from '../components/BomBulkImportModal';
 
 interface LandedRow {
   quoteId: string;
@@ -95,6 +96,7 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
 
   // Modals
   const [showNewRfq, setShowNewRfq] = useState(false);
+  const [showBomImport, setShowBomImport] = useState(false);
   const [showDiscover, setShowDiscover] = useState(false);
   const [discoverQuery, setDiscoverQuery] = useState('');
   const [quoteModalRfq, setQuoteModalRfq] = useState<RfqRecord | null>(null);
@@ -357,6 +359,9 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
               }}
             >
               <Compass size={15} /> Live AI Sourcing
+            </button>
+            <button type="button" className="btn" onClick={() => setShowBomImport(true)}>
+              <FileSpreadsheet size={15} /> Bulk Import BOM
             </button>
             <button type="button" className="btn btn-primary" onClick={() => setShowNewRfq(true)}>
               <Plus size={15} /> New RFQ
@@ -1010,6 +1015,15 @@ export function BuyingRfqsView({ userRole, onDataMutated, onOpenOutreach }: Prop
         onClose={() => setShowNegotiation(false)}
         data={negotiationData}
         onOpenOutreach={onOpenOutreach}
+      />
+
+      <BomBulkImportModal
+        open={showBomImport}
+        onClose={() => setShowBomImport(false)}
+        onImported={() => {
+          loadAll();
+          onDataMutated();
+        }}
       />
     </div>
   );

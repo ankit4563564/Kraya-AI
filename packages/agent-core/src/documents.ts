@@ -419,6 +419,70 @@ export function generateTallyPurchaseXml(input: TallyVoucherExportInput): string
 </ENVELOPE>`;
 }
 
+export interface ZohoBooksBillVoucher {
+  billNumber: string;
+  billDate: string;
+  dueDate?: string | null;
+  vendorName: string;
+  vendorGstin?: string | null;
+  taxablePaise: Paise;
+  cgstPaise: Paise;
+  sgstPaise: Paise;
+  igstPaise: Paise;
+  grandTotalPaise: Paise;
+  notes: string;
+}
+
+/**
+ * Generates an official Zoho Books Bills Import CSV (eliminating manual accounting entry).
+ */
+export function generateZohoBooksBillsCsv(bills: ZohoBooksBillVoucher[]): string {
+  const esc = (v: string | number) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const headers = [
+    'Bill Number',
+    'Bill Date',
+    'Due Date',
+    'Vendor Name',
+    'GST Treatment',
+    'GST Identification Number (GSTIN)',
+    'Account',
+    'Item Description',
+    'Quantity',
+    'Rate',
+    'Tax Name',
+    'Tax Amount',
+    'SubTotal',
+    'Total',
+    'Notes',
+  ].join(',');
+
+  const rows = bills.map((b) => {
+    const totalTaxPaise = b.cgstPaise + b.sgstPaise + b.igstPaise;
+    const taxName =
+      b.igstPaise > 0 ? 'IGST' : b.cgstPaise > 0 || b.sgstPaise > 0 ? 'CGST+SGST' : 'Exempt';
+    const gstTreatment = b.vendorGstin ? 'business_gst' : 'business_none';
+    return [
+      esc(b.billNumber),
+      esc(b.billDate),
+      esc(b.dueDate || b.billDate),
+      esc(b.vendorName),
+      esc(gstTreatment),
+      esc(b.vendorGstin || ''),
+      esc('Cost of Goods Sold'),
+      esc(`Purchase Bill ${b.billNumber}`),
+      '1',
+      fromPaise(b.taxablePaise).toFixed(2),
+      esc(taxName),
+      fromPaise(totalTaxPaise).toFixed(2),
+      fromPaise(b.taxablePaise).toFixed(2),
+      fromPaise(b.grandTotalPaise).toFixed(2),
+      esc(b.notes),
+    ].join(',');
+  });
+
+  return [headers, ...rows].join('\n');
+}
+
 export interface CaAuditPackInput {
   buyer: WorkspaceTaxProfile;
   invoices: Array<{

@@ -11,6 +11,7 @@ import {
   FileCode2,
   FileCheck2,
   TrendingUp,
+  Bot,
 } from 'lucide-react';
 import { API_BASE, apiJson, ComplianceFlag, formatINR, SupplierRecord, UserRole } from '../lib/api';
 import { ModalDialog } from '../components/ModalDialog';
@@ -116,6 +117,8 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
   const [showAmcModal, setShowAmcModal] = useState(false);
   const [showGstr2bModal, setShowGstr2bModal] = useState(false);
   const [cfoIntel, setCfoIntel] = useState<CfoIntelligence | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const [sweepBanner, setSweepBanner] = useState<string | null>(null);
   const [cnInvoice, setCnInvoice] = useState<InvoiceRow | null>(null);
   const [cnType, setCnType] = useState<'credit_note' | 'debit_note'>('credit_note');
   const [cnNumber, setCnNumber] = useState('');
@@ -179,6 +182,33 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
   useEffect(() => {
     loadAll();
   }, []);
+
+  const runAutonomousSweep = async () => {
+    setSweeping(true);
+    setSweepBanner(null);
+    try {
+      const res = await apiJson<{
+        createdTasksCount: number;
+        summary: {
+          staleRfqsFound: number;
+          overdueDeliveriesFound: number;
+          msmeCliffsFound: number;
+          rule37CliffsFound: number;
+          amcsDueFound: number;
+          incompleteKycSuppliers: number;
+        };
+      }>('/api/automation/run-sweep', { method: 'POST' });
+      setSweepBanner(
+        `Autonomous Sweep complete: ${res.createdTasksCount} new task(s) queued (${res.summary.staleRfqsFound} stale RFQs · ${res.summary.overdueDeliveriesFound} overdue POs · ${res.summary.msmeCliffsFound} 43B(h) cliffs · ${res.summary.incompleteKycSuppliers} incomplete KYC vendors).`
+      );
+      loadAll();
+      onDataMutated();
+    } catch (err) {
+      setSweepBanner(err instanceof Error ? err.message : 'Sweep failed.');
+    } finally {
+      setSweeping(false);
+    }
+  };
 
   const toggleTask = async (id: string, current: 'open' | 'done' | 'snoozed') => {
     await apiJson(`/api/tasks/${id}`, {
@@ -366,9 +396,25 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
         <div className="card-header">
           <div>
             <h2 className="card-title">Daily Follow-Up & Compliance Queue ({tasks.filter((t) => t.status === 'open').length} Open)</h2>
-            <p className="card-subtitle">Auto-populated from approved POs, MSME 43B(h) invoices, and recurring AMC schedules.</p>
+            <p className="card-subtitle">Auto-populated from approved POs, MSME 43B(h) invoices, incomplete vendor KYC, and recurring AMC schedules.</p>
           </div>
+          {!isCaReadOnly && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              disabled={sweeping}
+              onClick={runAutonomousSweep}
+            >
+              <Bot size={14} /> {sweeping ? 'Sweeping...' : 'Run Autonomous Expeditor Sweep'}
+            </button>
+          )}
         </div>
+
+        {sweepBanner && (
+          <div style={{ fontSize: 12, padding: '8px 10px', borderRadius: 8, background: 'var(--bg-app)', border: '1px solid var(--border)', marginBottom: 10 }}>
+            {sweepBanner}
+          </div>
+        )}
 
         {tasks.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>No open daily tasks yet.</div>
@@ -440,7 +486,7 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
             <h2 className="card-title">PO-vs-Invoice Mismatch &amp; GST IMS Register ({invoices.length})</h2>
             <p className="card-subtitle">Every bill checked for math reconciliation, CGST/IGST state split, IRN compliance, and MSME 43B(h) + 180-day Rule 37 dates.</p>
           </div>
-          <div className="row">
+          <div className="row" style={{ flexWrap: 'wrap' }}>
             <a
               href={`${API_BASE}/api/exports/tally.xml`}
               className="btn btn-sm"
@@ -448,6 +494,14 @@ export function MaintenanceDailyView({ userRole, onDataMutated, onOpenOutreach }
               rel="noreferrer"
             >
               <FileCode2 size={13} /> Tally Prime XML
+            </a>
+            <a
+              href={`${API_BASE}/api/exports/zoho-books.csv`}
+              className="btn btn-sm"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <FileSpreadsheet size={13} /> Zoho Books CSV
             </a>
             <a
               href={`${API_BASE}/api/exports/ca-audit-pack.xlsx`}
